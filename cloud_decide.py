@@ -185,7 +185,9 @@ def main():
     with open(STATE_FILE) as f:
         state = json.load(f)
 
-    account = state.get("account_number", "596618249")
+    account = state.get("account_number") or os.environ.get("ROBINHOOD_ACCOUNT")
+    if not account:
+        raise SystemExit("No account_number in live_state.json and ROBINHOOD_ACCOUNT not set.")
     close = prices_df(prices_json)
     today = dt.date.today()
 
