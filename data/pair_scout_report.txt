@@ -1,27 +1,21 @@
-PAIR SCOUT — weekly candidates (as of 2026-06-26)
+PAIR SCOUT â€” weekly candidates (as of 2026-06-26)
 ====================================================
 
->> 11 pair(s) ACTIONABLE NOW (|z| past entry): PNC/TFC z=+2.74, NVDA/TSM z=-2.52, COP/PSX z=-2.37, USB/TFC z=+2.76, TRV/CB z=+2.54, BAC/TFC z=+2.08, DUK/AEP z=-2.10, HD/LOW z=+3.22, CVX/PSX z=-2.20, EOG/OXY z=+2.77, COP/EOG z=-2.83
+>> 11 pair(s) ACTIONABLE NOW (|z| past entry): NVDA/TSM z=-2.52, COP/PSX z=-2.36, PNC/TFC z=+2.73, USB/TFC z=+2.74, BAC/TFC z=+2.07, TRV/CB z=+2.53, DUK/AEP z=-2.10, HD/LOW z=+3.23, COP/EOG z=-2.82, EOG/OXY z=+2.74, CVX/PSX z=-2.20
 
->> 2 ADD-CANDIDATE pair(s) — cointegrated + profitable backtest, NOT yet traded:
-   + COP/OXY     ADF -3.16 | half-life 22.1d | corr 0.81 | backtest net $5 (83% win) | z_now -0.28
-   + EOG/OXY     ADF -2.91 | half-life 29.1d | corr 0.8 | backtest net $2 (40% win) | z_now +2.77
+>> 3 ADD-CANDIDATE pair(s) â€” cointegrated + profitable backtest, NOT yet traded:
+   + COP/OXY     ADF -2.87 | half-life 28.0d | corr 0.81 | backtest net $3 (71% win) | z_now -0.29
+   + EOG/OXY     ADF -2.9 | half-life 38.3d | corr 0.8 | backtest net $1 (40% win) | z_now +2.74
+   + HAL/BKR     ADF -3.2 | half-life 59.7d | corr 0.7 | backtest net $2 (67% win) | z_now -0.12
    -> review these to ADD to pairs.json (expands the live traded set).
 
-Top 12 by quality score (* = already traded):
-1. PSX/VLO     | corr 0.85 | half-life 277.5d | coint no (ADF -0.23) | z_now -1.98 | backtest net $4 (100% win)
-2. BAC/WFC     | corr 0.83 | half-life 60.5d | coint no (ADF -1.66) | z_now +1.74 | backtest net $3 (100% win)
-3. PNC/TFC     | corr 0.88 | half-life 24.9d | coint no (ADF -1.45) | z_now +2.74  <-- SIGNAL | backtest net $3 (83% win)
-4. NVDA/TSM    | corr 0.73 | half-life 79.3d | coint no (ADF -0.15) | z_now -2.52  <-- SIGNAL | backtest net $4 (100% win)
-5. USB/PNC     | corr 0.87 | half-life 12.4d | coint no (ADF -2.69) | z_now -0.90 | backtest net $6 (100% win)
-6. COP/PSX     | corr 0.71 | half-life 67.2d | coint no (ADF -1.43) | z_now -2.37  <-- SIGNAL | backtest net $4 (100% win)
-7.*C/GS        | corr 0.81 | half-life 17.1d | coint no (ADF -2.46) | z_now +1.33 | backtest net $9 (100% win)
-8. USB/TFC     | corr 0.84 | half-life 27.6d | coint no (ADF -1.39) | z_now +2.76  <-- SIGNAL | backtest net $2 (75% win)
-9. JPM/MS      | corr 0.77 | half-life 133.7d | coint no (ADF -0.52) | z_now -0.94 | backtest net $3 (100% win)
-10. GS/MS       | corr 0.89 | half-life 25.9d | coint no (ADF -2.22) | z_now -1.56 | backtest net $3 (80% win)
-11. BAC/MS      | corr 0.76 | half-life 91.4d | coint no (ADF -1.38) | z_now -0.53 | backtest net $5 (100% win)
-12. PSX/MPC     | corr 0.86 | half-life 53.5d | coint no (ADF -1.88) | z_now -1.52 | backtest net $6 (80% win)
+Top 5 by quality score (* = already traded):
+1. PSX/VLO     | corr 0.85 | half-life 238.8d | coint no (ADF -0.25) | z_now -1.98 | backtest net $4 (100% win)
+2. NVDA/TSM    | corr 0.73 | half-life 74.6d | coint no (ADF -0.22) | z_now -2.52  <-- SIGNAL | backtest net $4 (100% win)
+3. USB/PNC     | corr 0.87 | half-life 12.5d | coint no (ADF -2.61) | z_now -0.92 | backtest net $6 (100% win)
+4. COP/PSX     | corr 0.71 | half-life 66.7d | coint no (ADF -1.53) | z_now -2.36  <-- SIGNAL | backtest net $3 (100% win)
+5. PNC/TFC     | corr 0.87 | half-life 23.3d | coint no (ADF -1.64) | z_now +2.73  <-- SIGNAL | backtest net $3 (80% win)
 
 Guide: want coint=yes (ADF<-2.86), corr>=0.8, half-life ~5-40d, positive net$.
 z_now = how stretched the spread is now; |z|>=entry triggers a trade.
-RESEARCH ONLY — review before trading.
+RESEARCH ONLY â€” review before trading.
