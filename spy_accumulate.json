@@ -1,0 +1,48 @@
+{
+  "_comment": "SPY ACCUMULATION strategy. Goal: slowly grow a core SPY position over the years while buying low and selling high. Each row in 'strategies' is one approach the backtest runs and compares (against a plain 'buy weekly / DCA' benchmark). 'defaults' apply to every strategy unless the row overrides them. Growth comes from buying DOLLAR chunks (fractional shares, rounded to 6 decimals like Robinhood) and only trimming a FRACTION of the OPPORTUNISTIC sleeve -- baseline buys are a protected core that is never sold.",
+
+  "symbol": "SPY",
+  "history_period": "10y",
+  "cost_bps": 2,
+
+  "weekly_vol_lookback": 52,
+  "trend_ma_days": 200,
+  "trend_vol_lookback": 200,
+
+  "defaults": {
+    "signal": "weekly",
+    "base_buy_dollars": 5,
+    "buy_dollars": 25,
+    "trim_pct": 0.05,
+    "entry_z": 1.5,
+    "sell_z": 2.5,
+    "cooldown_days": 5,
+    "dip_ladder": [
+      { "z": 1.5, "dollars": 15 },
+      { "z": 2.5, "dollars": 25 },
+      { "z": 3.5, "dollars": 35 }
+    ]
+  },
+
+  "strategies": [
+    { "label": "Buy 1.5σ dips + trim 5% at +2.5σ (YOUR PICK)", "entry_z": 1.5, "sell_z": 2.5, "trim_pct": 0.05 },
+    { "label": "Never sell (comparison)", "entry_z": 1.5, "sell_z": 99, "trim_pct": 0.0 }
+  ],
+
+  "_param_help": {
+    "signal": "How to judge low vs high: 'weekly' (this week's move vs a normal week) or 'trend' (price vs its 200-day average).",
+    "base_buy_dollars": "Steady buy every week no matter what (the accumulation core). 0 = pure timing, no steady buy.",
+    "buy_dollars": "EXTRA dollars to buy each time SPY is 'low' (on top of any baseline).",
+    "trim_pct": "Fraction of the OPPORTUNISTIC sleeve to sell when 'high'. The baseline core is never sold.",
+    "entry_z": "How far below normal counts as 'low enough to buy extra' (standard deviations).",
+    "sell_z": "How far above normal counts as 'high enough to trim'.",
+    "cooldown_days": "Min trading days between opportunistic buys/trims (5 ~= once a week). The baseline buy ignores this."
+  },
+
+  "_bot_allocation": {
+    "_comment": "Whole-bot capital split + total bankroll (source of truth for live/paper sizing). The paper brains (live_spy.py, live.py) read this via allocation.py and size their orders to each sleeve. 'total_capital' is YOUR number to edit -- it's a simulated/paper bankroll for now; raise it (or top up) as you add money. Backtest math ignores this block.",
+    "total_capital": 120,
+    "spy_accumulate_pct": 60,
+    "pairs_pct": 40
+  }
+}

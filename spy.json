@@ -1,0 +1,28 @@
+{
+  "_comment": "EDIT THIS to control the SPY weekly-to-date strategy. 'defaults' apply to every scenario unless the scenario overrides them. Each scenario is one variant the backtest runs and compares.",
+
+  "symbol": "SPY",
+  "history_period": "10y",
+  "vol_lookback_weeks": 52,
+
+  "defaults": {
+    "direction": "fade",
+    "mode": "long_short",
+    "entry_z": 2.0,
+    "exit_z": 0.5,
+    "stop_z": 3.5,
+    "max_days": 20,
+    "capital": 1000,
+    "cost_bps": 2
+  },
+
+  "scenarios": [
+    { "label": "Fade · 1σ",          "direction": "fade",     "entry_z": 1.0 },
+    { "label": "Fade · 2σ",          "direction": "fade",     "entry_z": 2.0 },
+    { "label": "Momentum · 1σ",      "direction": "momentum", "entry_z": 1.0 },
+    { "label": "Momentum · 2σ",      "direction": "momentum", "entry_z": 2.0 },
+    { "label": "Fade · 2σ · LONG-only", "direction": "fade",  "entry_z": 2.0, "mode": "long_only" },
+    { "label": "Fade · 1σ · LONG-only", "direction": "fade",  "entry_z": 1.0, "mode": "long_only" },
+    { "label": "Fade · 1σ · TUNED (OOS✓)", "direction": "fade", "mode": "long_only", "entry_z": 1.0, "exit_z": 0.5, "stop_z": 3.5, "max_days": 40 }
+  ]
+}

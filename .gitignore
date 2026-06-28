@@ -1,0 +1,19 @@
+# --- runtime state & account data (NEVER commit; contains holdings/account no.) ---
+data/*.json
+data/*.csv
+live_state.json
+intended_orders.json
+mcp_prices.json
+
+# --- large generated artifacts ---
+*.html
+*.png
+
+# --- python ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# --- keep the data/ folder present but empty ---
+!data/.gitkeep
