@@ -1,0 +1,13 @@
+{
+  "_comment": "SPY-style weekly-to-date SWING strategy, run on QQQ (higher vol) as a SEPARATE round-trip sleeve, kept apart from the SPY accumulator. Buys QQQ when the week is unusually DOWN (fade a dip), sells the WHOLE position when it reverts to the week's mean / stops / times out. long_only (cash account, no shorts). Params = the OOS-tuned config from spy.json's 'Fade · 1σ · TUNED'. 'capital' here is only a fallback; live sizing uses the swing sleeve budget from allocation.py (swing_pct of the real account value).",
+  "symbol": "QQQ",
+  "vol_lookback_weeks": 52,
+  "direction": "fade",
+  "mode": "long_only",
+  "entry_z": 1.0,
+  "exit_z": 0.5,
+  "stop_z": 3.5,
+  "max_days": 40,
+  "capital": 6,
+  "cost_bps": 2
+}

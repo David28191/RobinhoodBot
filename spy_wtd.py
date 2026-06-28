@@ -102,6 +102,57 @@ def _entry_signal(direction, z, entry_z):
     return 0
 
 
+def swing_live_decide(cfg, wf, state, capital):
+    """LIVE decision for the swing sleeve -- one round-trip position at a time,
+    consistent with backtest() above: fade entry on a dip, exit on reversion /
+    stop / time, long_only (no shorts). Uses the LAST row of weekly_frame `wf`.
+    `state` is the open-position dict (or empty/None when flat). `capital` is the
+    dollars to deploy on an open. Returns a list with at most one order dict."""
+    import datetime as _dt
+    direction = cfg.get("direction", "fade")
+    mode = cfg.get("mode", "long_only")
+    entry_z, exit_z = cfg["entry_z"], cfg["exit_z"]
+    stop_z, max_days = cfg.get("stop_z"), cfg.get("max_days")
+
+    price = float(wf["price"].iloc[-1])
+    z_live = float(wf["z"].iloc[-1])
+    anchor = float(wf["anchor"].iloc[-1])
+    sigma = float(wf["sigma"].iloc[-1])
+    today = _dt.date.today()
+    open_pos = state if state and state.get("open") else None
+
+    if open_pos is None:                                  # flat -> maybe OPEN
+        if np.isnan(z_live):
+            return []
+        sig = _entry_signal(direction, z_live, entry_z)
+        if sig == -1 and mode == "long_only":
+            sig = 0                                       # cash account can't short
+        if sig == +1 and not (np.isnan(anchor) or np.isnan(sigma)):
+            return [{"action": "OPEN", "side": "BUY", "dollars": round(capital, 2),
+                     "z": round(z_live, 2), "price": price,
+                     "frozen_anchor": anchor, "frozen_sigma": sigma,
+                     "reason": f"swing fade entry z={z_live:+.2f}"}]
+        return []
+
+    # holding -> measure reversion vs the FROZEN anchor from entry
+    fa, fs = open_pos.get("frozen_anchor"), open_pos.get("frozen_sigma")
+    zf = np.log(price / fa) / fs if (fa and fs) else np.nan
+    try:
+        held = (today - _dt.date.fromisoformat(open_pos["entry_date"])).days
+    except Exception:
+        held = 0
+    hit_revert = (not np.isnan(zf)) and abs(zf) <= exit_z
+    hit_stop = stop_z is not None and (not np.isnan(zf)) and abs(zf) >= stop_z
+    hit_time = max_days is not None and held >= max_days
+    if hit_revert or hit_stop or hit_time:
+        reason = "reverted" if hit_revert else ("stop-loss" if hit_stop else "time-stop")
+        return [{"action": "CLOSE", "side": "SELL", "shares": float(open_pos.get("shares", 0)),
+                 "sell_full_position": True, "price": price,
+                 "z": round(float(zf), 2) if not np.isnan(zf) else None,
+                 "reason": f"swing exit ({reason})"}]
+    return []
+
+
 # ---------------------------------------------------------------------------
 # 3) BACKTEST
 # ---------------------------------------------------------------------------

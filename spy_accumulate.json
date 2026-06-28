@@ -42,7 +42,8 @@
   "_bot_allocation": {
     "_comment": "Whole-bot capital split + total bankroll (source of truth for live/paper sizing). The paper brains (live_spy.py, live.py) read this via allocation.py and size their orders to each sleeve. 'total_capital' is YOUR number to edit -- it's a simulated/paper bankroll for now; raise it (or top up) as you add money. Backtest math ignores this block.",
     "total_capital": 120,
-    "spy_accumulate_pct": 60,
-    "pairs_pct": 40
+    "spy_accumulate_pct": 55,
+    "pairs_pct": 40,
+    "swing_pct": 5
   }
 }

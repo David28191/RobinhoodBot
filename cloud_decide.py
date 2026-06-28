@@ -42,11 +42,14 @@ import allocation
 import live                      # reuse live.decide (pairs) -- pure function
 import live_spy                  # reuse live_spy.decide (SPY) -- pure function
 import spy_accumulate as A
+import spy_wtd
 
+HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = pairbot.DATA_DIR
 PRICES_FILE = os.path.join(DATA, "mcp_prices.json")
 STATE_FILE = os.path.join(DATA, "live_state.json")
 OUT_FILE = os.path.join(DATA, "intended_orders.json")
+SWING_CFG_FILE = os.path.join(HERE, "swing.json")
 
 
 # ---------------------------------------------------------------------------
@@ -60,18 +63,19 @@ def prices_df(prices_json):
             {pd.Timestamp(b["date"]): float(b["close"]) for b in bars}
         ).sort_index()
         cols[ticker] = s
-    df = pd.DataFrame(cols).sort_index()
+    df = pd.DataFrame(cols)
+    df.index = pd.to_datetime(df.index)
+    df = df.sort_index()
     return df.dropna(how="all").ffill()
 
 
 # ---------------------------------------------------------------------------
 # Decide
 # ---------------------------------------------------------------------------
-def decide_pairs(cfg, close, state, today):
+def decide_pairs(cfg, close, state, today, al):
     """Mirror live.main()'s pair loop (budget + max_positions gating included)."""
     traded = cfg["pairs"]
     positions = state.get("pairs_positions", {})
-    al = allocation.load_allocation()
     pairs_budget = al["pairs_budget"]
     deployed = sum(leg["dollars"] for p in positions.values()
                    for leg in p["legs"] if leg["side"] == "BUY")
@@ -107,10 +111,9 @@ def decide_pairs(cfg, close, state, today):
     return orders, notes
 
 
-def decide_spy(cfg_acc, close, state):
+def decide_spy(cfg_acc, close, state, al):
     """Mirror live_spy.main()'s single-strategy decision."""
     strat = cfg_acc["strategies"][0]
-    al = allocation.load_allocation()
     px = close[cfg_acc["symbol"]].dropna()
     z = A.build_signals(cfg_acc, px)[strat["signal"]]
     z_now = float(z.dropna().iloc[-1])
@@ -126,10 +129,31 @@ def decide_spy(cfg_acc, close, state):
     return real, price, week_str, notes
 
 
+def decide_swing(cfg_swing, close, state, al):
+    """Swing sleeve on its own symbol (e.g. QQQ) -- one round-trip position at a
+    time, sized to the swing budget. Returns (orders, price, notes)."""
+    sym = cfg_swing["symbol"]
+    if sym not in close.columns:
+        return [], None, [f"swing {sym}: no data — skipped"]
+    px = close[sym].dropna()
+    wf = spy_wtd.weekly_frame(px, cfg_swing["vol_lookback_weeks"])
+    price = float(px.iloc[-1])
+    sw_state = state.get("swing", {})
+    capital = al.get("swing_budget", 0)
+    orders = spy_wtd.swing_live_decide(cfg_swing, wf, sw_state, capital)
+    zlast = float(wf["z"].iloc[-1]) if not np.isnan(wf["z"].iloc[-1]) else float("nan")
+    if orders:
+        notes = [f"swing {sym} z={zlast:+.2f} -> {orders[0]['action']} ({orders[0]['reason']})"]
+    else:
+        held = "holding" if sw_state.get("open") else "flat"
+        notes = [f"swing {sym} z={zlast:+.2f} ({held}) -> no action"]
+    return orders, price, notes
+
+
 # ---------------------------------------------------------------------------
 # Turn internal decisions into broker-ready intended orders (dollar/share sized)
 # ---------------------------------------------------------------------------
-def to_broker_orders(pair_orders, spy_orders, spy_price, state, account):
+def to_broker_orders(pair_orders, spy_orders, swing_orders, swing_symbol, state, account):
     shares = state.get("shares", {})
     out = []
 
@@ -162,6 +186,20 @@ def to_broker_orders(pair_orders, spy_orders, spy_price, state, account):
         elif o["side"] == "SELL":      # TRIM -> sell a share quantity
             out.append({**base, "side": "sell", "quantity": f"{o['shares']:.6f}",
                         "bucket": o.get("bucket")})
+
+    # --- swing sleeve (one round-trip on swing_symbol, e.g. QQQ) ---
+    for o in swing_orders:
+        base = {"ref_id": str(uuid.uuid4()), "source": "swing",
+                "reason": o["reason"], "account_number": account,
+                "symbol": swing_symbol, "type": "market"}
+        if o["side"] == "BUY":
+            out.append({**base, "side": "buy", "dollar_amount": f"{o['dollars']:.2f}"})
+        elif o["side"] == "SELL":               # exit -> sell the full real position
+            q = shares.get(swing_symbol)
+            sell = {**base, "side": "sell", "sell_full_position": True}
+            if q:
+                sell["quantity"] = f"{float(q):.6f}"
+            out.append(sell)
     return out
 
 
@@ -193,12 +231,21 @@ def main():
 
     cfg_pairs = pairbot.load_config()
     cfg_acc = A.load_config()
+    with open(SWING_CFG_FILE) as f:
+        cfg_swing = json.load(f)
 
-    pair_orders, pair_notes = decide_pairs(cfg_pairs, close, state, today)
-    spy_orders, spy_price, spy_week, spy_notes = decide_spy(cfg_acc, close, state)
+    # Bankroll = REAL account value when provided (so weekly deposits + gains grow
+    # every sleeve AND the per-run cap automatically); else the static config.
+    bankroll = float(state.get("account_value") or allocation.load_allocation()["total"])
+    al = allocation.load_allocation(bankroll)
+    max_run_spend = min(round(0.25 * bankroll, 2), 150.0)   # 25% of account, hard ceiling $150
 
-    broker = to_broker_orders(pair_orders, spy_orders, spy_price, state, account)
-    broker, dropped, cash_left = cash_guard(broker, state.get("cash", 0))
+    pair_orders, pair_notes = decide_pairs(cfg_pairs, close, state, today, al)
+    spy_orders, spy_price, spy_week, spy_notes = decide_spy(cfg_acc, close, state, al)
+    swing_orders, swing_price, swing_notes = decide_swing(cfg_swing, close, state, al)
+
+    broker = to_broker_orders(pair_orders, spy_orders, swing_orders, cfg_swing["symbol"], state, account)
+    broker, dropped, cash_left = cash_guard(broker, min(float(state.get("cash", 0)), max_run_spend))
 
     # Optimistic post-trade state (assumes the market orders fill) so the live
     # routine can persist an accurate ledger AFTER it confirms the places.
@@ -216,15 +263,25 @@ def main():
                               "entry_z": o["z"], "legs": o["legs"]}
         elif o["action"] == "CLOSE":
             pos.pop(o["pair"], None)
+    for o in swing_orders:
+        if o["action"] == "OPEN":
+            sh = round(o["dollars"] / swing_price, 6) if swing_price else 0.0
+            new_state["swing"] = {"open": True, "entry_date": today.isoformat(),
+                                  "entry_price": o["price"], "frozen_anchor": o["frozen_anchor"],
+                                  "frozen_sigma": o["frozen_sigma"], "shares": sh}
+        elif o["action"] == "CLOSE":
+            new_state["swing"] = {}
     with open(os.path.join(DATA, "updated_state.json"), "w") as f:
         json.dump(new_state, f, indent=2)
 
     result = {
         "as_of": str(close.index[-1].date()),
         "account_number": account,
+        "bankroll": round(bankroll, 2),
+        "max_run_spend": max_run_spend,
         "cash_before": state.get("cash"),
         "cash_after_est": round(cash_left, 2),
-        "notes": spy_notes + pair_notes,
+        "notes": spy_notes + pair_notes + swing_notes,
         "intended_orders": broker,
         "dropped_orders": dropped,
     }
