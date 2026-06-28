@@ -20,7 +20,7 @@ INPUT FILES (the cloud agent builds these from MCP calls):
   data/mcp_prices.json  {ticker: [{"date":"YYYY-MM-DD","close":float}, ...], ...}
   data/live_state.json  {
       "cash": float,                         # from get_portfolio buying_power
-      "account_number": "596618249",
+      "account_number": "<your agentic account number>",
       "pairs_positions": { <positions.json shape> },
       "spy": { <spy_positions.json shape> }, # core/sleeve ledger carried between runs
       "shares": { ticker: float, ... }       # real shares held (from get_equity_positions)
