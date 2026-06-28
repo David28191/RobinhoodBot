@@ -123,7 +123,7 @@ def decide_spy(cfg_acc, close, state):
     real = [o for o in orders if o["action"] != "SKIP"]
     notes = [f"SPY z={z_now:+.2f} price=${price:.2f} week={week_str} -> "
              + (", ".join(f"{o['action']} ${o['dollars']:.2f}" for o in real) if real else "no order")]
-    return real, price, notes
+    return real, price, week_str, notes
 
 
 # ---------------------------------------------------------------------------
@@ -195,10 +195,29 @@ def main():
     cfg_acc = A.load_config()
 
     pair_orders, pair_notes = decide_pairs(cfg_pairs, close, state, today)
-    spy_orders, spy_price, spy_notes = decide_spy(cfg_acc, close, state)
+    spy_orders, spy_price, spy_week, spy_notes = decide_spy(cfg_acc, close, state)
 
     broker = to_broker_orders(pair_orders, spy_orders, spy_price, state, account)
     broker, dropped, cash_left = cash_guard(broker, state.get("cash", 0))
+
+    # Optimistic post-trade state (assumes the market orders fill) so the live
+    # routine can persist an accurate ledger AFTER it confirms the places.
+    import copy
+    new_state = copy.deepcopy(state)
+    sp = new_state.setdefault("spy", {"core_shares": 0.0, "sleeve_shares": 0.0,
+                                      "sleeve_basis": 0.0, "net_deployed": 0.0,
+                                      "last_base_week": None, "last_action_date": None})
+    for o in spy_orders:
+        live_spy.apply_paper(o, sp, spy_week, spy_price)
+    pos = new_state.setdefault("pairs_positions", {})
+    for o in pair_orders:
+        if o["action"] == "OPEN":
+            pos[o["pair"]] = {"direction": o["direction"], "entry_date": today.isoformat(),
+                              "entry_z": o["z"], "legs": o["legs"]}
+        elif o["action"] == "CLOSE":
+            pos.pop(o["pair"], None)
+    with open(os.path.join(DATA, "updated_state.json"), "w") as f:
+        json.dump(new_state, f, indent=2)
 
     result = {
         "as_of": str(close.index[-1].date()),
