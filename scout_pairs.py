@@ -43,7 +43,9 @@ def prices_df(prices_json):
 
 
 def scout(close):
-    defaults = pairbot.load_config().get("defaults", {})
+    cfg = pairbot.load_config()
+    traded = {p["name"] for p in cfg.get("pairs", [])}
+    defaults = cfg.get("defaults", {})
     entry_z = float(defaults.get("entry_z", 2.0))
     rows = []
     for group, syms in F.UNIVERSE.items():
@@ -78,6 +80,7 @@ def scout(close):
                 "coint": "yes" if coint else "no",
                 "z_now": round(z_now, 2), "signal": "YES" if abs(z_now) >= entry_z else "",
                 "trades": n, "win%": round(wr), "net$": round(float(net)),
+                "traded": "yes" if f"{a}/{b}" in traded else "",
             })
     df = pd.DataFrame(rows)
     if df.empty:
@@ -99,10 +102,21 @@ def build_report(df, top, as_of):
         lines.append(f">> {len(actionable)} pair(s) ACTIONABLE NOW (|z| past entry): "
                      + ", ".join(f"{r['pair']} z={r['z_now']:+.2f}" for _, r in actionable.iterrows()))
         lines.append("")
-    lines.append(f"Top {len(head)} by quality score:")
+    add = df[(df["coint"] == "yes") & (df["net$"] > 0) & (df["traded"] != "yes")
+             & (df["half_life"] >= 5) & (df["half_life"] <= 60)]
+    if len(add):
+        lines.append(f">> {len(add)} ADD-CANDIDATE pair(s) — cointegrated + profitable backtest, NOT yet traded:")
+        for _, r in add.head(top).iterrows():
+            lines.append(f"   + {r['pair']:11s} ADF {r['adf']} | half-life {r['half_life']}d | corr {r['corr']} "
+                         f"| backtest net ${r['net$']} ({r['win%']}% win) | z_now {r['z_now']:+.2f}")
+        lines.append("   -> review these to ADD to pairs.json (expands the live traded set).")
+        lines.append("")
+
+    lines.append(f"Top {len(head)} by quality score (* = already traded):")
     for i, r in head.iterrows():
+        mark = "*" if r.get("traded") == "yes" else " "
         lines.append(
-            f"{i+1}. {r['pair']:11s} | corr {r['corr']:.2f} | half-life {r['half_life']}d "
+            f"{i+1}.{mark}{r['pair']:11s} | corr {r['corr']:.2f} | half-life {r['half_life']}d "
             f"| coint {r['coint']} (ADF {r['adf']}) | z_now {r['z_now']:+.2f}"
             f"{'  <-- SIGNAL' if r['signal'] else ''} | backtest net ${r['net$']} ({r['win%']}% win)")
     lines += ["",
