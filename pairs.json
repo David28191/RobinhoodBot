@@ -20,7 +20,8 @@
     { "a": "JPM",  "b": "WFC"  },
     { "a": "XOM",  "b": "CVX"  },
     { "a": "V",    "b": "MA"   },
-    { "a": "BSOL", "b": "IBIT", "lookback": 30 }
+    { "a": "BSOL", "b": "IBIT", "lookback": 30 },
+    { "a": "NVDA", "b": "TSM"  }
   ],
 
   "watchlist": [
