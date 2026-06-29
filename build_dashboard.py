@@ -15,11 +15,13 @@ Data sources (all local; refreshed by the cloud routines or a manual fetch):
   python build_dashboard.py            # writes bot_dashboard.html and opens it
 """
 
+import itertools
 import json
 import os
 import webbrowser
 
 import allocation
+import find_pairs as F
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "data")
@@ -164,6 +166,36 @@ def build():
                 f"<tbody>{rows}</tbody></table>")
     act_html = act_table(actionable)
 
+    # ---- pair-finder SCOPE + "what changed" vs the previous run ----
+    SCOPE_PREV = os.path.join(DATA, "scope_prev.json")
+    uni_tickers = sorted({t for g in F.UNIVERSE.values() for t in g})
+    _mcp = load(os.path.join(DATA, "mcp_prices.json"), {})
+    with_data = sorted(set(_mcp.keys()) & set(uni_tickers))
+    missing = sorted(set(uni_tickers) - set(with_data)) if _mcp else []
+    coint_pairs = sorted(r["pair"] for r in allrecs if r.get("coint") == "yes")
+    act_pairs = sorted(r["pair"] for r in allrecs if r.get("signal") == "YES")
+    prev_scope = load(SCOPE_PREV, {})
+
+    def _new(a, b):
+        return sorted(set(a) - set(b))
+    scope_changes = []
+    if prev_scope:
+        for lbl, a, b in [("🔻 dropped out (no data)", missing, prev_scope.get("missing", [])),
+                          ("🔺 back in", prev_scope.get("missing", []), missing),
+                          ("🟢 newly cointegrated", coint_pairs, prev_scope.get("coint", [])),
+                          ("⚪ lost cointegration", prev_scope.get("coint", []), coint_pairs),
+                          ("⚡ newly actionable", act_pairs, prev_scope.get("actionable", [])),
+                          ("✓ no longer actionable", prev_scope.get("actionable", []), act_pairs)]:
+            d = _new(a, b)
+            if d:
+                scope_changes.append((lbl, ", ".join(d)))
+    try:
+        with open(SCOPE_PREV, "w", encoding="utf-8") as f:
+            json.dump({"as_of": snap.get("as_of", ""), "missing": missing,
+                       "coint": coint_pairs, "actionable": act_pairs}, f)
+    except Exception:
+        pass
+
     overview = f"""
       <h2>Allocation</h2>{alloc_html}
       <h2>Recent trades</h2>{trades_html}
@@ -198,9 +230,31 @@ def build():
 
     plist = ", ".join(f"{p['a']}/{p['b']}" for p in pairs_cfg.get("pairs", []))
     pd_ = pairs_cfg.get("defaults", {})
+    _combos = sum(len(list(itertools.combinations(v, 2))) for v in F.UNIVERSE.values())
+    if not prev_scope:
+        chg_html = "<p class='muted small'>First snapshot — changes will appear here on the next refresh.</p>"
+    elif not scope_changes:
+        chg_html = "<p class='muted small'>No changes since the last update.</p>"
+    else:
+        chg_html = "".join(f"<div class='chg'><b>{lbl}</b>&nbsp; {val}</div>" for lbl, val in scope_changes)
+    scope_html = f'''
+      <h3>Pair-finder scope</h3>
+      <div class="stats" style="grid-template-columns:repeat(3,1fr)">
+        {stat("Universe", f"{len(F.UNIVERSE)} sectors", f"{len(uni_tickers)} tickers")}
+        {stat("Candidate pairs", f"{_combos:,}", "same-sector combos")}
+        {stat("With price data", f"{len(with_data) if _mcp else len(uni_tickers)}", f"{len(missing)} missing")}
+        {stat("Passed correlation", f"{len(allrecs)}", "corr &ge; 0.70")}
+        {stat("Cointegrated", f"{len(coint_pairs)}", "trustworthy springs")}
+        {stat("Currently trading", f"{len(pairs_cfg.get('pairs', []))}", "of the candidates")}
+      </div>
+      <p class="muted small">Sectors: {", ".join(sorted(F.UNIVERSE.keys()))}</p>
+      <h3>Changes since last update</h3>
+      {chg_html}'''
     pairs_tab = f"""
       <h2>Pairs <span class="muted">— buy the cheap leg when the spread stretches (long-only)</span></h2>
-      <p>Traded: <b>{plist}</b></p>
+      {scope_html}
+      <p>Traded: <b>{plist}</b></p>"""
+    pairs_tab += f"""
       <p>Open |z|≥{pd_.get('entry_z')} → buy {money(pd_.get('capital_per_leg',0))} of the cheap leg
          &middot; close on revert/stop/time &middot; max {pairs_cfg.get('max_positions')} positions.</p>
       <p class="muted">Budget {money(al['pairs_budget'])} ({al['pairs_pct']:.0f}%) &middot; deployed {money(deployed['Pairs'])}</p>
@@ -242,6 +296,8 @@ def build():
   .tabs button.active {{ background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }}
   .panel {{ display:none; }} .panel.active {{ display:block; }}
   h2 {{ font-size:16px; margin:22px 0 10px; }}
+  h3 {{ font-size:12px; margin:20px 0 8px; color:var(--mut); text-transform:uppercase; letter-spacing:.05em; }}
+  .chg {{ background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 11px; margin:6px 0; font-size:13.5px; }}
   table {{ width:100%; border-collapse:collapse; background:var(--card);
            border:1px solid var(--line); border-radius:12px; overflow:hidden; }}
   th,td {{ text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); font-size:14px; }}
