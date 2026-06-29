@@ -140,15 +140,39 @@ def build():
           {warn}
         </div>"""
     add_html = "".join(rec_card(r) for r in adds[:6]) or "<div class='muted'>No add-candidates this week.</div>"
-    act_list = ", ".join(f"{r['pair']} ({r['z_now']:+.2f})" for r in actionable[:12]) or "none"
+
+    def act_table(items):
+        if not items:
+            return "<div class='muted'>None right now.</div>"
+        rows = ""
+        for r in items[:15]:
+            a, b = r["pair"].split("/")
+            buy = a if r["z_now"] < 0 else b
+            down = r.get("sector_trend") == "DOWN"
+            spring = "✓" if r.get("coint") == "yes" else "—"
+            sect = (f"{r.get('sector','?')} <span class='muted'>"
+                    f"({r.get('sector_3mo',0):+d}% / {r.get('sector_200',0):+d}%)</span>")
+            warn = " <span class='neg'>⚠</span>" if down else ""
+            tr = "●" if r.get("traded") == "yes" else ""
+            rows += (f"<tr class='{'down' if down else ''}'><td><b>{r['pair']}</b></td>"
+                     f"<td><b>{r['z_now']:+.2f}</b></td><td><span class='chip'>BUY {buy}</span></td>"
+                     f"<td>{sect}{warn}</td><td>{spring} <span class='muted'>{r.get('adf')}</span></td>"
+                     f"<td>{r.get('corr')}</td><td>{r.get('half_life')}d</td>"
+                     f"<td>{r.get('win%')}%</td><td>{tr}</td></tr>")
+        return ("<table><thead><tr><th>Pair</th><th>z</th><th>Action</th><th>Sector (3mo/200d)</th>"
+                "<th>Coint (ADF)</th><th>Corr</th><th>Half-life</th><th>Win%</th><th>Trading</th></tr></thead>"
+                f"<tbody>{rows}</tbody></table>")
+    act_html = act_table(actionable)
 
     overview = f"""
       <h2>Allocation</h2>{alloc_html}
       <h2>Recent trades</h2>{trades_html}
       <h2>Recommendations to ADD <span class="muted">(cointegrated + profitable, not yet traded)</span></h2>
       <div class="recs">{add_html}</div>
-      <h2>Actionable now <span class="muted">(|z| past entry)</span></h2>
-      <div class="muted small">{act_list}</div>"""
+      <h2>Actionable now <span class="muted">(|z| past entry — would trigger a trade)</span></h2>
+      {act_html}
+      <p class="muted small">BUY = the cheap leg it would buy &middot; Coint ✓ = trustworthy spring (ADF&lt;-2.86)
+        &middot; Sector (3mo/200d) = recent vs structural trend, ⚠ = recently falling &middot; ● = already trading</p>"""
 
     # ---- strategy tabs ----
     def pos_table(filter_strat):
@@ -223,6 +247,7 @@ def build():
   th,td {{ text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); font-size:14px; }}
   th {{ color:var(--mut); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.03em; }}
   tr:last-child td {{ border-bottom:none; }}
+  tr.down {{ background:#1c1517; }}
   .pos {{ color:var(--pos); font-weight:600; }} .neg {{ color:var(--neg); font-weight:600; }}
   .muted {{ color:var(--mut); }} .small {{ font-size:13px; }}
   .chip {{ font-size:12px; background:#1f2630; border:1px solid var(--line); border-radius:6px; padding:1px 7px; }}

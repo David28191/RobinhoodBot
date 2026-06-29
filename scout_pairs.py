@@ -125,10 +125,21 @@ def build_report(df, top, as_of):
         return f"Pair Scout {as_of}: no candidates cleared the filters (corr>={F.MIN_CORR})."
     head = df.head(top)
     lines = [f"PAIR SCOUT — weekly candidates (as of {as_of})", "=" * 52, ""]
-    actionable = df[df["signal"] == "YES"]
+    actionable = df[df["signal"] == "YES"].reindex(
+        df[df["signal"] == "YES"]["z_now"].abs().sort_values(ascending=False).index)
     if len(actionable):
-        lines.append(f">> {len(actionable)} pair(s) ACTIONABLE NOW (|z| past entry): "
-                     + ", ".join(f"{r['pair']} z={r['z_now']:+.2f}" for _, r in actionable.iterrows()))
+        lines.append(f">> {len(actionable)} pair(s) ACTIONABLE NOW (|z| past entry — would trigger a trade):")
+        for _, r in actionable.iterrows():
+            a, b = r["pair"].split("/")
+            buy = a if r["z_now"] < 0 else b                      # long-only: buy the cheap leg
+            spring = "✓spring" if r["coint"] == "yes" else "weak"
+            flags = (" ⚠SECTOR FALLING" if r["sector_trend"] == "DOWN" else "") \
+                + ("  [already trading]" if r["traded"] == "yes" else "")
+            lines.append(f"   • {r['pair']:11s} z={r['z_now']:+5.2f}  ->  BUY {buy:5s}{flags}")
+            lines.append(f"       sector: {r['sector']} ({r['sector_3mo']:+d}% 3mo, {r['sector_200']:+d}% vs200d)")
+            lines.append(f"       coint {r['coint']} ({spring}, ADF {r['adf']}) | corr {r['corr']} | "
+                         f"half-life {r['half_life']}d | backtest {r['win%']}% win, net ${r['net$']}")
+        lines.append("   (BUY <leg> = the cheap side it would buy; ✓spring = cointegrated/trustworthy mean-reversion)")
         lines.append("")
     add = df[(df["coint"] == "yes") & (df["net$"] > 0) & (df["traded"] != "yes")
              & (df["half_life"] >= 5) & (df["half_life"] <= 60)]
@@ -172,7 +183,7 @@ def main():
     df = scout(close)
     report = build_report(df, args.top, as_of)
 
-    with open(REPORT_TXT, "w") as f:
+    with open(REPORT_TXT, "w", encoding="utf-8") as f:
         f.write(report + "\n")
     payload = {"as_of": as_of, "top": df.head(args.top).to_dict("records"),
                "all": df.to_dict("records") if not df.empty else []}
