@@ -42,11 +42,37 @@ def prices_df(prices_json):
     return pd.DataFrame(cols).sort_index().dropna(how="all").ffill()
 
 
+def sector_trends(close):
+    """MACRO context per sector: average of (last price / 200-day MA - 1) across a
+    group's members. Negative = the sector is BELOW its trend (sinking). Because the
+    pairs are long-only (you go LONG the cheap leg), this flags 'you'd be buying into
+    a sinking sector' -- shown in the report, NOT hard-blocked (you decide)."""
+    out = {}
+    for group, syms in F.UNIVERSE.items():
+        ma_vals, mo3 = [], []
+        for s in syms:
+            if s in close.columns:
+                ser = close[s].dropna()
+                if len(ser) >= 200:
+                    ma_vals.append(float(ser.iloc[-1] / ser.tail(200).mean() - 1))
+                if len(ser) > 63:
+                    mo3.append(float(ser.iloc[-1] / ser.iloc[-63] - 1))
+        if mo3:
+            r3 = float(np.mean(mo3))                              # recent 3-month momentum
+            vs200 = int(round(np.mean(ma_vals) * 100)) if ma_vals else 0  # structural trend
+            lab = "DOWN" if r3 < -0.05 else ("up" if r3 > 0.05 else "flat")
+            out[group] = (lab, int(round(r3 * 100)), vs200)
+        else:
+            out[group] = ("?", 0, 0)
+    return out
+
+
 def scout(close):
     cfg = pairbot.load_config()
     traded = {p["name"] for p in cfg.get("pairs", [])}
     defaults = cfg.get("defaults", {})
     entry_z = float(defaults.get("entry_z", 2.0))
+    st = sector_trends(close)
     rows = []
     for group, syms in F.UNIVERSE.items():
         for a, b in itertools.combinations(syms, 2):
@@ -81,6 +107,8 @@ def scout(close):
                 "z_now": round(z_now, 2), "signal": "YES" if abs(z_now) >= entry_z else "",
                 "trades": n, "win%": round(wr), "net$": round(float(net)),
                 "traded": "yes" if f"{a}/{b}" in traded else "",
+                "sector": group, "sector_trend": st[group][0],
+                "sector_3mo": st[group][1], "sector_200": st[group][2],
             })
     df = pd.DataFrame(rows)
     if df.empty:
@@ -107,7 +135,9 @@ def build_report(df, top, as_of):
     if len(add):
         lines.append(f">> {len(add)} ADD-CANDIDATE pair(s) — cointegrated + profitable backtest, NOT yet traded:")
         for _, r in add.head(top).iterrows():
-            lines.append(f"   + {r['pair']:11s} ADF {r['adf']} | half-life {r['half_life']}d | corr {r['corr']} "
+            warn = "  <<! sector sinking — you'd be long a falling sector" if r["sector_trend"] == "DOWN" else ""
+            lines.append(f"   + {r['pair']:11s}  sector: {r['sector']}  (3mo {r['sector_3mo']:+d}%, vs200d {r['sector_200']:+d}%)" + warn)
+            lines.append(f"       ADF {r['adf']} | half-life {r['half_life']}d | corr {r['corr']} "
                          f"| backtest net ${r['net$']} ({r['win%']}% win) | z_now {r['z_now']:+.2f}")
         lines.append("   -> review these to ADD to pairs.json (expands the live traded set).")
         lines.append("")
@@ -115,13 +145,16 @@ def build_report(df, top, as_of):
     lines.append(f"Top {len(head)} by quality score (* = already traded):")
     for i, r in head.iterrows():
         mark = "*" if r.get("traded") == "yes" else " "
+        flag = f" 3mo{r['sector_3mo']:+d}%" + (" !DOWN" if r["sector_trend"] == "DOWN" else "")
         lines.append(
-            f"{i+1}.{mark}{r['pair']:11s} | corr {r['corr']:.2f} | half-life {r['half_life']}d "
+            f"{i+1}.{mark}{r['pair']:11s} [{r['sector']}{flag}] | corr {r['corr']:.2f} | half-life {r['half_life']}d "
             f"| coint {r['coint']} (ADF {r['adf']}) | z_now {r['z_now']:+.2f}"
-            f"{'  <-- SIGNAL' if r['signal'] else ''} | backtest net ${r['net$']} ({r['win%']}% win)")
+            f"{'  <-- SIGNAL' if r['signal'] else ''} | net ${r['net$']} ({r['win%']}% win)")
     lines += ["",
               "Guide: want coint=yes (ADF<-2.86), corr>=0.8, half-life ~5-40d, positive net$.",
               "z_now = how stretched the spread is now; |z|>=entry triggers a trade.",
+              "sector: 3mo = sector's avg recent 3-month move (DOWN if <-5%); vs200d = structural trend",
+              "  (pairs are LONG-ONLY, so opening = going LONG the cheap leg's sector — mind a DOWN tag).",
               "RESEARCH ONLY — review before trading."]
     return "\n".join(lines)
 

@@ -17,3 +17,6 @@ venv/
 
 # --- keep the data/ folder present but empty ---
 !data/.gitkeep
+
+# generated reports (routines must not push these)
+data/*.txt
