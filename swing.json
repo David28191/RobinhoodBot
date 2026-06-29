@@ -8,6 +8,6 @@
   "exit_z": 0.5,
   "stop_z": 3.5,
   "max_days": 40,
-  "capital": 6,
+  "capital": 12,
   "cost_bps": 2
 }
