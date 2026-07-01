@@ -138,15 +138,32 @@ def decide_swing(cfg_swing, close, state, al):
     px = close[sym].dropna()
     wf = spy_wtd.weekly_frame(px, cfg_swing["vol_lookback_weeks"])
     price = float(px.iloc[-1])
+    notes = []
+
+    # Robinhood is the source of truth: reconcile the ledger against REAL shares.
+    # A state that says "open" with no real position is stale (an entry that was
+    # decided but never placed/filled) and would otherwise wedge the sleeve flat
+    # forever, then emit an unfillable SELL. Mutates `state` so the reset is
+    # persisted via updated_state.json.
+    real_q = float(state.get("shares", {}).get(sym) or 0.0)
     sw_state = state.get("swing", {})
+    if sw_state.get("open") and real_q <= 0:
+        notes.append(f"swing {sym}: state said open but account holds no {sym} "
+                     f"-- stale entry, reset to flat")
+        state["swing"] = sw_state = {}
+    elif not sw_state.get("open") and real_q > 0:
+        notes.append(f"swing {sym}: account holds {real_q:.6f} {sym} the state doesn't "
+                     f"track -- OPEN blocked until reconciled (no double-buy)")
+        return [], price, notes
+
     capital = al.get("swing_budget", 0)
     orders = spy_wtd.swing_live_decide(cfg_swing, wf, sw_state, capital)
     zlast = float(wf["z"].iloc[-1]) if not np.isnan(wf["z"].iloc[-1]) else float("nan")
     if orders:
-        notes = [f"swing {sym} z={zlast:+.2f} -> {orders[0]['action']} ({orders[0]['reason']})"]
+        notes.append(f"swing {sym} z={zlast:+.2f} -> {orders[0]['action']} ({orders[0]['reason']})")
     else:
         held = "holding" if sw_state.get("open") else "flat"
-        notes = [f"swing {sym} z={zlast:+.2f} ({held}) -> no action"]
+        notes.append(f"swing {sym} z={zlast:+.2f} ({held}) -> no action")
     return orders, price, notes
 
 

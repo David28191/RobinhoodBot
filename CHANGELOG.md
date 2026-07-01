@@ -3,6 +3,14 @@
 Notable changes to the autonomous trading bot. Newest first.
 (Account: Agentic cash `••••596618249`, ~$120, +$10/week deposits.)
 
+## 2026-07-01 — Swing sleeve unwedged (Robinhood-as-source-of-truth guard)
+### Fixed
+- **QQQ swing never traded** — root cause: on the first live run (6/29) the routine placed the SPY + IBIT orders but never placed the intended QQQ buy, then persisted the *optimistic* state (which assumes fills) to Drive. Every run since read `swing.open=true` → "holding" → no action, and a phantom SELL was queued to fail on reversion.
+- **`decide_swing` now reconciles state against REAL shares** (Robinhood is the source of truth): state says open but account holds no QQQ → reset to flat (logged) and trade normally; account holds QQQ the state doesn't track → block OPEN (no double-buy) until reconciled. The reset persists via `updated_state.json`.
+### Known follow-ups
+- Routine should persist state only **after confirming each `place_equity_order` succeeded** (the optimistic-state design is what let one missed order poison the ledger).
+- Drive has **duplicate `robinhood_live_state.json` files** (connector can only create, not update) — routine must load the newest; stale older copies should be trashed manually.
+
 ## 2026-06-29 — Allocation tweak + dashboard scope
 ### Changed
 - Allocation **50 / 40 / 10** (accumulator / pairs / QQQ swing) — swing 5%→10% (~$12), taken from the accumulator (55%→50%). Pushed; live brain picks it up next run.
