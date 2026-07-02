@@ -4,6 +4,9 @@ Notable changes to the autonomous trading bot. Newest first.
 (Account: Agentic cash `••••596618249`, ~$120, +$10/week deposits.)
 
 ## 2026-07-01 — Swing sleeve unwedged (Robinhood-as-source-of-truth guard)
+### Added
+- **Second daily LIVE run at 3:45pm ET** (`trig_013DVtkwfVswcdxdQ59QWEqC`, Mon–Fri) — same brain, same rails, notifications prefixed `RH LIVE PM`. Lets the swing/pairs react intra-day before the close instead of only at 9:40am. (Cron is UTC: 19:45Z = 3:45pm EDT; in winter EST it drifts to 2:45pm — still inside regular hours, fine for fractional market orders.)
+- Both LIVE routine prompts now say: if Drive has **duplicate `robinhood_live_state.json`** files, load the **most recently modified** (the Drive connector can only create, not update, so duplicates accumulate).
 ### Fixed
 - **QQQ swing never traded** — root cause: on the first live run (6/29) the routine placed the SPY + IBIT orders but never placed the intended QQQ buy, then persisted the *optimistic* state (which assumes fills) to Drive. Every run since read `swing.open=true` → "holding" → no action, and a phantom SELL was queued to fail on reversion.
 - **`decide_swing` now reconciles state against REAL shares** (Robinhood is the source of truth): state says open but account holds no QQQ → reset to flat (logged) and trade normally; account holds QQQ the state doesn't track → block OPEN (no double-buy) until reconciled. The reset persists via `updated_state.json`.

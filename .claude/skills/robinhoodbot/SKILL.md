@@ -79,6 +79,7 @@ Bankroll = **real account value** (so weekly deposits + gains grow every sleeve)
 | Routine | ID | Schedule | Does |
 |---|---|---|---|
 | **Cloud Brain (LIVE)** | `trig_01Y4CUVbxd9P3SkjXZYp5bQu` | Mon–Fri 9:40am ET | **ENABLED** — places real trades (live since 2026-06-28). |
+| **Cloud Brain (LIVE, PM)** | `trig_013DVtkwfVswcdxdQ59QWEqC` | Mon–Fri 3:45pm ET | **ENABLED** — second daily run (added 2026-07-01) so swing/pairs can react intra-day before the close; same prompt, notifications prefixed `RH LIVE PM`. |
 | Pair Scout | `trig_01RF4emscfykPKgba1Adcjaj` | Mon 8:05am ET | Pair candidates + sector trend → push + Drive (`pair_scout_latest.txt`). |
 | Trade Review | `trig_01T669GazXXPoWNijRGeowGw` | Fri 5:08pm ET | Hindsight scorecard → push + Drive (`trade_review_latest.txt`). |
 | Dashboard Refresh | `trig_019hbuAg3ij4oPZAFh4xbt81` | Daily 6:05pm ET | Rebuilds dashboard (account + recs) → Drive (`bot_dashboard_latest.html`); persists `scope_prev.json` for day-over-day diffs. |
