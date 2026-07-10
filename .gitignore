@@ -20,3 +20,4 @@ venv/
 
 # generated reports (routines must not push these)
 data/*.txt
+data/*.jsonl
