@@ -32,10 +32,11 @@ Notable changes to the autonomous trading bot. Newest first.
 ### Added — recording
 - **Append-only run journal** `data/bot_journal.jsonl` — `cloud_decide` appends one JSON line per run
   (timestamp, as-of, bankroll, cash before/after, decision notes, intended orders w/ `ref_id`),
-  never overwritten. **⚠ Cloud follow-up (routine-prompt edit, not yet done):** the sandbox is wiped
-  each run, so the LIVE routine must **download the journal from Drive before, and upload it after**
-  (like `robinhood_live_state.json`), ideally appending CONFIRMED `place_equity_order` fills too. Until
-  then the journal only persists across LOCAL runs. See SKILL.md → "Recording (durable history)".
+  never overwritten. **Drive round-trip WIRED same day:** both LIVE routines (`trig_01Y4…` 9:40am,
+  `trig_013D…` 3:45pm) now download `robinhood_bot_journal.jsonl` from Drive → `data/bot_journal.jsonl`
+  (step 2b) and upload it back on the no-orders (step 6) and success (step 8) paths — so the history
+  accumulates across cloud runs. First Drive copy appears after the next LIVE run. Optional next:
+  append CONFIRMED `place_equity_order` fills (order id), not just intent.
 
 ## 2026-07-01 — Swing sleeve unwedged (Robinhood-as-source-of-truth guard)
 ### Added

@@ -125,13 +125,14 @@ Robinhood agent in the Robinhood app, OR ask Claude to disable it.
 **Recording (durable history):** every `cloud_decide` run appends a JSON line to
 `data/bot_journal.jsonl` (never overwritten): timestamp, as-of date, bankroll, cash before/after,
 the decision `notes`, and the `intended_orders` (source/symbol/side/amount/reason/`ref_id`).
-⚠ **The cloud sandbox is wiped each run**, so for the journal to actually accumulate the routine
-MUST round-trip it through Drive like state: **before** step 5 download the existing
-`bot_journal.jsonl` from Drive into `data/`; **after** step 6, upload the appended file back
-(and, ideally, append a second line per order with the CONFIRMED broker order id/fill from
-`place_equity_order`, so the journal records not just intent but what actually filled). Without
-this Drive round-trip the journal only reflects the single latest run. *(Routine-prompt change —
-edit the LIVE trigger prompt to add the download/upload steps.)*
+**Drive round-trip WIRED (2026-07-09):** both LIVE routines (`trig_01Y4…` 9:40am, `trig_013D…`
+3:45pm) now **download `robinhood_bot_journal.jsonl` from Drive → `data/bot_journal.jsonl` (step 2b)**
+before `cloud_decide` appends this run's line, and **upload it back to Drive** on the no-orders path
+(step 6) and the all-placed-success path (step 8). Drive file: `robinhood_bot_journal.jsonl` (in the
+shared-drive root; the connector can only create, so dated duplicates accumulate — routine loads the
+MOST-RECENTLY-MODIFIED, same as state). First copy appears after the next LIVE run.
+_Still optional/nice-to-have:_ append a second line per order with the CONFIRMED `place_equity_order`
+id/fill so the journal records what actually filled, not just intent (currently intent only).
 
 **Caps enforced:** `cloud_decide` drops buys exceeding `min(cash, 25%-of-account)`; the live
 routine adds a $150 absolute backstop and a **SPY base-buy guard** (checks order history so a
@@ -182,5 +183,6 @@ vs-SPY). Improvement = (signal from reports) + (this skill's rules for changing 
 - Email delivery from routines unverified — reports go via **push + Google Drive**; connect a Gmail connector for real inbox email.
 - **Pair expansion paused this week** — all current ADD-candidates are energy (long-into-a-falling-sector); waiting for a cointegrated candidate in a sector OK to be long. Widen scope by editing `find_pairs.UNIVERSE`.
 - Swing sleeve = **20% (~$32)** (raised from 10% on 2026-07-09, funded from accumulator 50→40%); base+ladder, rolling anchor, grows with the account.
-- **Journal not yet Drive-persisted** — `bot_journal.jsonl` appends locally; edit the LIVE routine prompt to download/upload it via Drive (see "Recording (durable history)") so it survives cloud runs.
+- **Journal Drive-persistence WIRED (2026-07-09)** — both LIVE routines download/upload `robinhood_bot_journal.jsonl` (steps 2b/6/8); first Drive copy appears after the next LIVE run. Optional next: log CONFIRMED fills (order id) per order, not just intent.
+- **Ladder step-tracking is trusted from the saved ledger, only loosely reconciled** — `decide_swing` checks base-established vs shares-exist, NOT exact `steps`/`trade_shares` vs real QQQ qty. Hardening idea: derive `steps` from the real share count each run (full Robinhood-as-source-of-truth) so a missed/partial fill can't drift the ladder.
 - Optional next: **Robinhood-as-source-of-truth** state so Drive is never load-bearing for trade correctness; a sector-trend *filter* (vs the current flag) in the live pair logic.
