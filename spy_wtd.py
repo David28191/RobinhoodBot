@@ -38,6 +38,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(HERE, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
+SHARE_DECIMALS = 6          # Robinhood fractional-share precision
+
 
 # ---------------------------------------------------------------------------
 # 1) CONFIG
@@ -85,6 +87,35 @@ def weekly_frame(px, vol_lookback_weeks):
 
     z_live = np.log(px / anchor) / sigma
     return pd.DataFrame({"price": px, "anchor": anchor, "sigma": sigma, "z": z_live})
+
+
+def rolling_frame(px, mean_window, z_lookback):
+    """Rolling-mean anchor (continuous, no weekly reset). For each day:
+      anchor = trailing `mean_window`-day mean of close (a rolling 'weekly mean')
+      dev    = ln(price / anchor)                       (deviation from the mean)
+      sigma  = rolling std of dev over `z_lookback` days (typical deviation size)
+      z      = dev / sigma
+    Because the anchor is a lagging average rather than last Friday's close, a
+    price that keeps FALLING stays below the mean and z stays negative (and
+    deepens if the fall accelerates) instead of resetting each Monday -- so the
+    ladder keeps buying a multi-week decline. All trailing windows -> no look-ahead."""
+    mean = px.rolling(mean_window).mean()
+    dev = np.log(px / mean)
+    sigma = dev.rolling(z_lookback).std()
+    z = dev / sigma
+    return pd.DataFrame({"price": px, "anchor": mean, "sigma": sigma, "z": z})
+
+
+def swing_frame(cfg, px):
+    """Build the weekly-to-date frame the swing/accumulator z uses, picking the
+    anchor style from cfg["anchor"]: 'rolling'/'rolling_weekly_mean' -> rolling_frame
+    (continuous mean, captures multi-week trends); anything else -> weekly_frame
+    (prior-Friday anchor that resets each Monday, the original behavior)."""
+    anchor = str(cfg.get("anchor", "weekly_reset")).lower()
+    if anchor.startswith("rolling"):
+        return rolling_frame(px, int(cfg.get("anchor_window_days", 5)),
+                             int(cfg.get("z_lookback_days", 252)))
+    return weekly_frame(px, int(cfg.get("vol_lookback_weeks", 52)))
 
 
 def _entry_signal(direction, z, entry_z):
@@ -151,6 +182,200 @@ def swing_live_decide(cfg, wf, state, capital):
                  "z": round(float(zf), 2) if not np.isnan(zf) else None,
                  "reason": f"swing exit ({reason})"}]
     return []
+
+
+# ---------------------------------------------------------------------------
+# 2b) SWING LADDER  --  "base + trade-around-it" oscillator (always net long)
+# ---------------------------------------------------------------------------
+# Instead of the flat<->fully-in round-trip above, this holds a permanent BASE
+# long in the symbol (a protected floor, never sold) and trades a sleeve AROUND
+# it: on a weekly DIP it ADDs a step (moves in), on a weekly RIP it TRIMs a step
+# (moves out) -- but only down to the base. It never goes to cash and never sells
+# the base. Sized off the swing budget:
+#   base_dollars = budget * base_pct                 (held forever)
+#   step_dollars = budget * (1 - base_pct) / n_steps (the oscillating sleeve)
+# so deployed ranges from base_dollars (0 steps) up to full budget (n_steps).
+def _swing_defaults(cfg):
+    # Ladders map a weekly-to-date z to a TARGET number of deployed sleeve steps.
+    # add_ladder (dip side, z negative): deeper dip -> higher target (buy more).
+    # trim_ladder (rip side, z positive): higher rip -> lower target (sell more).
+    # The gap between the innermost threshold (±1σ) and 0 is a DEAD-BAND where
+    # small moves do nothing -> gentle on small moves, aggressive on big ones.
+    return (
+        float(cfg.get("base_pct", 0.25)),
+        int(cfg.get("n_steps", 4)),
+        cfg.get("add_ladder", [[-1.0, 1], [-2.0, 2], [-3.0, 4]]),
+        cfg.get("trim_ladder", [[1.0, 3], [2.0, 1], [3.0, 0]]),
+        int(cfg.get("cooldown_days", 3)),
+    )
+
+
+def _ladder_target(z, add_ladder, trim_ladder, cur_steps, n_steps):
+    """Target deployed-steps for the current z. Dips can only INCREASE exposure,
+    rips can only DECREASE it (so we never sell into a dip / buy into a rip), and
+    the ±1σ dead-band holds. Deeper moves jump straight to a further target =>
+    a big dip/rip moves multiple steps in one go; a small move moves one."""
+    if np.isnan(z):
+        return cur_steps
+    best = None                                             # DIP -> raise target
+    for thr, steps in add_ladder:
+        if z <= thr:
+            best = steps if best is None else max(best, steps)
+    if best is not None:
+        return min(n_steps, max(cur_steps, int(best)))
+    best = None                                             # RIP -> lower target
+    for thr, steps in trim_ladder:
+        if z >= thr:
+            best = steps if best is None else min(best, steps)
+    if best is not None:
+        return max(0, min(cur_steps, int(best)))
+    return cur_steps                                        # dead-band -> hold
+
+
+def swing_ladder_decide(cfg, wf, state, budget):
+    """LIVE decision for the base+ladder swing sleeve. `state` is the swing ledger
+    dict (see apply_swing_ladder). Returns a list with at most one order:
+      BASE_BUY (establish the floor) | ADD (buy toward target) | TRIM (sell toward
+    target). Step size scales with |z| via the ladders. Never sells the base;
+    cooldown-gates the add/trim (not the base)."""
+    import datetime as _dt
+    base_pct, n_steps, add_ladder, trim_ladder, cooldown = _swing_defaults(cfg)
+    price = float(wf["price"].iloc[-1])
+    z = float(wf["z"].iloc[-1])
+    base_dollars = round(budget * base_pct, 2)
+    step_dollars = round(budget * (1 - base_pct) / n_steps, 2) if n_steps else 0.0
+
+    # 1) establish the base first (buy-and-hold floor), then ladder on later runs
+    if not state.get("base_established"):
+        if base_dollars > 0:
+            return [{"action": "BASE_BUY", "side": "BUY", "dollars": base_dollars,
+                     "price": price, "z": None, "reason": "establish base long"}]
+        return []
+
+    # 2) cooldown-gate the oscillation so one multi-day dip isn't chased every day
+    last = state.get("last_action_date")
+    days_since = (_dt.date.today() - _dt.date.fromisoformat(last)).days if last else 10 ** 9
+    if days_since < cooldown or np.isnan(z):
+        return []
+
+    steps = int(state.get("steps", 0))
+    target = _ladder_target(z, add_ladder, trim_ladder, steps, n_steps)
+    if target > steps:                                      # DIP -> move IN k steps
+        k = target - steps
+        return [{"action": "ADD", "side": "BUY", "dollars": round(k * step_dollars, 2),
+                 "to_steps": target, "price": price, "z": round(z, 2),
+                 "reason": f"dip z={z:+.2f}: {steps}->{target}/{n_steps} steps (+{k})"}]
+    if target < steps:                                      # RIP -> move OUT k steps
+        k = steps - target
+        sell_sh = round(state.get("trade_shares", 0.0) * k / steps, SHARE_DECIMALS)
+        if sell_sh > 0:
+            return [{"action": "TRIM", "side": "SELL", "shares": sell_sh,
+                     "to_steps": target, "price": price, "z": round(z, 2),
+                     "reason": f"rip z={z:+.2f}: {steps}->{target}/{n_steps} steps (-{k})"}]
+    return []
+
+
+def apply_swing_ladder(order, state, price):
+    """Update the swing ledger for one filled base/ladder order. Ledger shape:
+      {base_shares, trade_shares, trade_basis, steps, base_established, last_action_date}
+    Base shares are never reduced here (the base is a protected floor)."""
+    today = dt.date.today().isoformat()
+    state.setdefault("base_shares", 0.0)
+    state.setdefault("trade_shares", 0.0)
+    state.setdefault("trade_basis", 0.0)
+    state.setdefault("steps", 0)
+    if order["action"] == "BASE_BUY":
+        sh = round(order["dollars"] / price, SHARE_DECIMALS) if price else 0.0
+        state["base_shares"] = round(state["base_shares"] + sh, SHARE_DECIMALS)
+        state["base_established"] = True
+    elif order["action"] == "ADD":
+        sh = round(order["dollars"] / price, SHARE_DECIMALS) if price else 0.0
+        state["trade_shares"] = round(state["trade_shares"] + sh, SHARE_DECIMALS)
+        state["trade_basis"] = round(state["trade_basis"] + order["dollars"], 2)
+        state["steps"] = int(order.get("to_steps", int(state["steps"]) + 1))
+        state["last_action_date"] = today
+    elif order["action"] == "TRIM":
+        sh = order["shares"]
+        ts = state["trade_shares"]
+        avg = (state["trade_basis"] / ts) if ts else 0.0
+        state["trade_basis"] = round(max(0.0, state["trade_basis"] - avg * sh), 2)
+        state["trade_shares"] = round(max(0.0, ts - sh), SHARE_DECIMALS)
+        state["steps"] = int(order.get("to_steps", max(0, int(state["steps"]) - 1)))
+        state["last_action_date"] = today
+    return state
+
+
+def backtest_swing_ladder(wf, cfg):
+    """Simulate the base+ladder oscillator for reporting (decide on close, fill at
+    next session -- no look-ahead). Returns a summary dict incl. net P&L, a
+    buy-and-hold comparison, action counts, and a daily equity Series."""
+    base_pct, n_steps, add_ladder, trim_ladder, cooldown = _swing_defaults(cfg)
+    budget = float(cfg["capital"])
+    cost_rate = cfg.get("cost_bps", 0) / 10000.0
+    base_dollars = budget * base_pct
+    step_dollars = budget * (1 - base_pct) / n_steps if n_steps else 0.0
+
+    px, z, idx, n = wf["price"], wf["z"], wf.index, len(wf)
+    base_sh = trade_sh = 0.0
+    steps = 0
+    net_deployed = 0.0                 # buys - trim proceeds (cost basis of the book)
+    established = False
+    last_i = -10 ** 9
+    n_add = n_trim = 0
+    daily = []
+    for i in range(n):
+        date, price, zl = idx[i], px.iat[i], z.iat[i]
+        has_next = i + 1 < n
+        fpx = px.iat[i + 1] if has_next else np.nan
+        can_fill = has_next and not np.isnan(fpx)
+        if can_fill:
+            if not established:
+                sh = base_dollars * (1 - cost_rate) / fpx
+                base_sh += sh
+                net_deployed += base_dollars
+                established = True
+                last_i = i + 1
+            elif (i - last_i) >= cooldown and not np.isnan(zl):
+                target = _ladder_target(zl, add_ladder, trim_ladder, steps, n_steps)
+                if target > steps:                          # DIP -> add k steps
+                    k = target - steps
+                    dollars = k * step_dollars
+                    trade_sh += dollars * (1 - cost_rate) / fpx
+                    net_deployed += dollars
+                    steps = target
+                    last_i = i + 1
+                    n_add += 1
+                elif target < steps:                        # RIP -> trim k steps
+                    k = steps - target
+                    sell_sh = trade_sh * k / steps
+                    proceeds = sell_sh * fpx * (1 - cost_rate)
+                    trade_sh -= sell_sh
+                    net_deployed -= proceeds
+                    steps = target
+                    last_i = i + 1
+                    n_trim += 1
+        equity = (base_sh + trade_sh) * price - net_deployed
+        daily.append((date, equity))
+
+    daily_series = pd.Series({d: v for d, v in daily}, name="swing_ladder").astype(float)
+    pnl = float(daily_series.iloc[-1]) if len(daily_series) else 0.0
+    max_dd = float((daily_series.cummax() - daily_series).max()) if len(daily_series) > 1 else 0.0
+    # buy-and-hold the FULL budget from the first fillable day, for comparison
+    first_px = next((px.iat[i + 1] for i in range(n - 1) if not np.isnan(px.iat[i + 1])), np.nan)
+    last_px = float(px.iloc[-1])
+    bh_pnl = (budget / first_px * last_px - budget) if first_px and not np.isnan(first_px) else 0.0
+    return {
+        "net_pnl": round(pnl, 2),
+        "return_pct": round(pnl / budget * 100, 2) if budget else 0.0,
+        "buy_hold_pnl": round(float(bh_pnl), 2),
+        "max_dd": round(max_dd, 2),
+        "adds": n_add,
+        "trims": n_trim,
+        "final_base_shares": round(base_sh, SHARE_DECIMALS),
+        "final_trade_shares": round(trade_sh, SHARE_DECIMALS),
+        "final_steps": steps,
+        "daily": daily_series,
+    }
 
 
 # ---------------------------------------------------------------------------

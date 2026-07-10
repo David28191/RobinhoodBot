@@ -30,27 +30,45 @@ orders — your PC can be off. This skill is the manual for operating and improv
 Bankroll = **real account value** (so weekly deposits + gains grow every sleeve). Split in
 `spy_accumulate.json` → `_bot_allocation` (read via `allocation.py`):
 
-| Sleeve | % | ~$ at $120 | What it does |
+| Sleeve | % | ~$ at ~$158 | What it does |
 |---|---|---|---|
-| SPY accumulator | 50% | ~$60 | buy-and-hold core + opportunistic dips |
-| Pairs | 40% | ~$48 | "pair" stat-arb, but LONG-ONLY = a directional long of the cheap leg |
-| QQQ swing | 10% | ~$12 | round-trip fade of weekly QQQ dips |
+| SPY accumulator | 40% | ~$63 | buy-and-hold core + opportunistic dips (rolling-anchor signal) |
+| Pairs | 40% | ~$63 | "pair" stat-arb, but LONG-ONLY = a directional long of the cheap leg |
+| QQQ swing | 20% | ~$32 | base long + trade around it (always net long) |
+_Sizing tracks the REAL account value each run (allocation.py off `get_portfolio`), so these $ grow with deposits/gains._
 
 **1. SPY accumulator** (`spy_accumulate.json`, logic in `live_spy.py`):
 - Weekly **base buy $5** → protected core, never sold
 - **Dip ladder**: −1.5σ→$15, −2.5σ→$25, −3.5σ→$35 (5-day cooldown)
 - **Trim 5%** of the *dip-sleeve only* at +2.5σ (core untouched)
+- **Signal = `rolling`** (10-day rolling-mean anchor, `rolling_ma_days=10`) since 2026-07-09 — z =
+  `ln(price / 10-day mean) / rolling_std`, continuous so it catches multi-week dips. (Was `weekly`,
+  which reset each Monday and fired only ~1 dip buy in 2 years.) Options: `weekly` / `rolling` / `trend`.
 
 **2. Pairs** (`pairs.json`, logic in `live.py` / `pairbot.py`):
 - Traded pairs: C/GS, JPM/WFC, XOM/CVX, V/MA, BSOL/IBIT
 - **Open BUY $15** of the cheap leg when |z| ≥ 2.0; close on revert (≤0.5) / stop (3.5) / 90-day time-stop
 - Max **5** open positions; z = rolling-`lookback`(120) ratio z-score
 
-**3. QQQ swing** (`swing.json`, logic in `spy_wtd.py::swing_live_decide`):
-- Fade: **BUY the swing sleeve (~$12, 10%)** when QQQ weekly z ≤ −1.0; SELL the whole position on
-  revert (|z|≤0.5) / stop (3.5) / 40-day time-stop. **Anchor frozen at entry.**
-- One round-trip at a time. Backtest (10y, $1k scale): +$550, 71% win, Sharpe 0.46
-  (chosen over SPY-swing, which is redundant with the accumulator).
+**3. QQQ swing** (`swing.json`, logic in `spy_wtd.py::swing_ladder_decide`) — v2 "base + trade around it":
+- Always net long. Establish a permanent **base = `base_pct` (25%) of the sleeve** (~$8 at ~$32
+  budget) that is **NEVER sold** (a protected floor). Trade the other ~75% around it in
+  **`n_steps` (2) steps of ~$12** (your ~$10 trade).
+- **10-day rolling-mean anchor** (`anchor: "rolling_weekly_mean"`, `anchor_window_days=10`) via
+  `spy_wtd.swing_frame`/`rolling_frame` — z = `ln(price / 10-day mean)/rolling_std`, continuous (no
+  weekly reset) so a multi-week decline keeps the ladder buying.
+- **Z-banded exposure ladder** — step size scales with the move (aggressive on big dips/rips, nothing
+  inside ±1σ). `add_ladder` maps a dip z → target steps (`−1σ→1, −2σ→2`=full); `trim_ladder` a rip z →
+  target (`+1σ→1, +2σ→0`=base). Dips only raise exposure, rips only lower it (never sell into a dip /
+  buy into a rip); a **big move jumps straight to full/base in one order**, a small move moves one, the
+  ±1σ dead-band holds. `cooldown_days` (3) gates add/trim (not the base). Deployed ~$8 (base) → ~$32
+  (full). Ledger `{base_shares, trade_shares, trade_basis, steps, base_established}`; ADD/TRIM carry `to_steps`.
+- Reconciles to Robinhood as source of truth: stale base w/ no real shares → reset & re-establish;
+  untracked real shares → **adopted as the base** (no double-buy). Backtest (2y QQQ, $24): **+$3.97,
+  max DD $2.10, 3 adds/2 trims** — lower drawdown than buy-hold (+$5.88) but trails it in a strong
+  up-market (the trade-off of a small base). Tune `base_pct`/`n_steps`/`add_ladder`/`trim_ladder`/
+  `anchor_window_days` in `swing.json`.
+  *(Old v1 was a flat↔fully-in round-trip fade via `swing_live_decide`, still in `spy_wtd.py` for the SPY-WTD dashboard.)*
 
 ---
 
@@ -60,7 +78,7 @@ Bankroll = **real account value** (so weekly deposits + gains grow every sleeve)
 |---|---|
 | `cloud_decide.py` | **The brain.** Reads MCP prices + state, runs all 3 strategies, emits `data/intended_orders.json` + `data/updated_state.json`. Data-agnostic (no yfinance) so it runs in the cloud. |
 | `live.py` / `live_spy.py` | Pure `decide()` for pairs / accumulator (reused by the brain; also paper-run locally). |
-| `spy_wtd.py` | Swing engine: `weekly_frame`, `backtest`, `swing_live_decide`. |
+| `spy_wtd.py` | Swing engine: `weekly_frame`; v2 base+ladder = `swing_ladder_decide` / `apply_swing_ladder` / `backtest_swing_ladder` / `_ladder_target`; plus the old SPY round-trip `backtest` / `swing_live_decide`. |
 | `spy_accumulate.py` | Accumulator engine + signals + `_bot_allocation`. |
 | `pairbot.py` | Pair engine: `fetch_prices` (yfinance, **local only**), `compute_spread`, `backtest_pair`. |
 | `allocation.py` | Single source of truth for the 50/40/10 split; `load_allocation(bankroll)` sizes off real account value. |
@@ -99,9 +117,21 @@ Robinhood agent in the Robinhood app, OR ask Claude to disable it.
 3. Pulls **prices** via Robinhood `get_equity_historicals` (NOT yfinance — sandbox blocks Yahoo)
    for SPY + QQQ + pair tickers → `data/mcp_prices.json`.
 4. Reads live **cash + account_value + positions** via `get_portfolio` / `get_equity_positions`.
-5. Runs `python cloud_decide.py` → `data/intended_orders.json` (+ `updated_state.json`).
+5. Runs `python cloud_decide.py` → `data/intended_orders.json` (+ `updated_state.json`, and
+   **appends one line to `data/bot_journal.jsonl`** — the durable run history).
 6. For each intended order: `review_equity_order` → `place_equity_order` (fresh `ref_id`).
 7. Saves updated state back to Drive; pushes a notification.
+
+**Recording (durable history):** every `cloud_decide` run appends a JSON line to
+`data/bot_journal.jsonl` (never overwritten): timestamp, as-of date, bankroll, cash before/after,
+the decision `notes`, and the `intended_orders` (source/symbol/side/amount/reason/`ref_id`).
+⚠ **The cloud sandbox is wiped each run**, so for the journal to actually accumulate the routine
+MUST round-trip it through Drive like state: **before** step 5 download the existing
+`bot_journal.jsonl` from Drive into `data/`; **after** step 6, upload the appended file back
+(and, ideally, append a second line per order with the CONFIRMED broker order id/fill from
+`place_equity_order`, so the journal records not just intent but what actually filled). Without
+this Drive round-trip the journal only reflects the single latest run. *(Routine-prompt change —
+edit the LIVE trigger prompt to add the download/upload steps.)*
 
 **Caps enforced:** `cloud_decide` drops buys exceeding `min(cash, 25%-of-account)`; the live
 routine adds a $150 absolute backstop and a **SPY base-buy guard** (checks order history so a
@@ -151,5 +181,6 @@ vs-SPY). Improvement = (signal from reports) + (this skill's rules for changing 
 - **LIVE since 2026-06-28** — first real autonomous run Mon 2026-06-29 9:40am ET. Drive read+write confirmed working; the dashboard refreshes daily.
 - Email delivery from routines unverified — reports go via **push + Google Drive**; connect a Gmail connector for real inbox email.
 - **Pair expansion paused this week** — all current ADD-candidates are energy (long-into-a-falling-sector); waiting for a cointegrated candidate in a sector OK to be long. Widen scope by editing `find_pairs.UNIVERSE`.
-- Swing sleeve = **10% (~$12)**; thin edge (Sharpe 0.46 on QQQ), grows with the account.
+- Swing sleeve = **20% (~$32)** (raised from 10% on 2026-07-09, funded from accumulator 50→40%); base+ladder, rolling anchor, grows with the account.
+- **Journal not yet Drive-persisted** — `bot_journal.jsonl` appends locally; edit the LIVE routine prompt to download/upload it via Drive (see "Recording (durable history)") so it survives cloud runs.
 - Optional next: **Robinhood-as-source-of-truth** state so Drive is never load-bearing for trade correctness; a sector-trend *filter* (vs the current flag) in the live pair logic.

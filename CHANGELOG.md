@@ -3,6 +3,40 @@
 Notable changes to the autonomous trading bot. Newest first.
 (Account: Agentic cash `••••596618249`, ~$120, +$10/week deposits.)
 
+## 2026-07-09 — QQQ swing redesign + rolling anchor (swing & accumulator) + allocation + journal
+### Changed — QQQ swing = "base + trade around it"
+- Replaced the flat↔fully-in round-trip fade with an **always-net-long base+ladder**. Establishes a
+  permanent **base long = `base_pct` (25%) of the sleeve, NEVER sold** (a protected floor), then
+  trades the rest AROUND it via a **z-banded exposure ladder** so step size scales with the move:
+  `add_ladder −1σ→1 / −2σ→2 steps`, `trim_ladder +1σ→1 / +2σ→0`, with a **±1σ dead-band** (small
+  moves do nothing, a big move jumps straight to full/base). `n_steps=2`, `cooldown_days=3`. New
+  logic: `spy_wtd.swing_ladder_decide` / `apply_swing_ladder` / `backtest_swing_ladder` /
+  `_ladder_target`; `swing.json` reshaped. `cloud_decide.decide_swing` rewritten for the new ledger
+  `{base_shares, trade_shares, trade_basis, steps, base_established}` + reconciliation (adopts
+  untracked real QQQ as the base; resets a stale base). **TRIM sells a specific share quantity, never
+  `sell_full_position`** — a trim can't dump the protected base.
+### Changed — rolling-mean anchor (swing AND accumulator)
+- New **`spy_wtd.rolling_frame` / `swing_frame`**: anchor = trailing **10-day** mean (continuous),
+  `z = ln(price/mean)/rolling_std`, instead of the weekly-reset anchor (prior-Friday close). A price
+  that keeps falling stays below its mean, so the ladder keeps buying a **multi-week decline** instead
+  of re-baselining every Monday. Swing uses it via `anchor: "rolling_weekly_mean"` in `swing.json`.
+- **SPY accumulator switched to the same rolling signal** (`spy_accumulate.py::rolling_signal`,
+  `strategies[0].signal="rolling"`, `rolling_ma_days=10`). Backtest (2y SPY): the old `weekly` signal
+  fired only **1 dip buy / 0 trims** in 2 years (nearly inert); rolling → **4 buys / 2 trims**, similar
+  ROI (~18%). Recalibrated because rolling z is a different scale (`|z|>1` ~25% of days vs ~12%).
+### Changed — allocation 50/40/10 → 40/40/20
+- QQQ swing **10%→20%** (from the accumulator 50%→40%), so trades are ~$10 not ~$2 (base ~$8, steps
+  ~$12 at the real ~$158 account). Pairs unchanged at 40%. Existing positions untouched; only future
+  sizing changes. Swing backtest at $24: **+$3.97, max DD $2.10, 3 adds/2 trims** (still trails
+  buy-hold by design — small base).
+### Added — recording
+- **Append-only run journal** `data/bot_journal.jsonl` — `cloud_decide` appends one JSON line per run
+  (timestamp, as-of, bankroll, cash before/after, decision notes, intended orders w/ `ref_id`),
+  never overwritten. **⚠ Cloud follow-up (routine-prompt edit, not yet done):** the sandbox is wiped
+  each run, so the LIVE routine must **download the journal from Drive before, and upload it after**
+  (like `robinhood_live_state.json`), ideally appending CONFIRMED `place_equity_order` fills too. Until
+  then the journal only persists across LOCAL runs. See SKILL.md → "Recording (durable history)".
+
 ## 2026-07-01 — Swing sleeve unwedged (Robinhood-as-source-of-truth guard)
 ### Added
 - **Second daily LIVE run at 3:45pm ET** (`trig_013DVtkwfVswcdxdQ59QWEqC`, Mon–Fri) — same brain, same rails, notifications prefixed `RH LIVE PM`. Lets the swing/pairs react intra-day before the close instead of only at 9:40am. (Cron is UTC: 19:45Z = 3:45pm EDT; in winter EST it drifts to 2:45pm — still inside regular hours, fine for fractional market orders.)

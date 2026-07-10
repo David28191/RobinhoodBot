@@ -8,6 +8,8 @@
   "weekly_vol_lookback": 52,
   "trend_ma_days": 200,
   "trend_vol_lookback": 200,
+  "rolling_ma_days": 10,
+  "rolling_vol_lookback": 252,
 
   "defaults": {
     "signal": "weekly",
@@ -25,12 +27,12 @@
   },
 
   "strategies": [
-    { "label": "Buy 1.5σ dips + trim 5% at +2.5σ (YOUR PICK)", "entry_z": 1.5, "sell_z": 2.5, "trim_pct": 0.05 },
+    { "label": "Buy 1.5σ dips + trim 5% at +2.5σ (YOUR PICK)", "signal": "rolling", "entry_z": 1.5, "sell_z": 2.5, "trim_pct": 0.05 },
     { "label": "Never sell (comparison)", "entry_z": 1.5, "sell_z": 99, "trim_pct": 0.0 }
   ],
 
   "_param_help": {
-    "signal": "How to judge low vs high: 'weekly' (this week's move vs a normal week) or 'trend' (price vs its 200-day average).",
+    "signal": "How to judge low vs high: 'weekly' (this week's move vs a normal week, resets each Mon), 'rolling' (price vs its rolling_ma_days mean — continuous, captures multi-week dips), or 'trend' (price vs its 200-day average).",
     "base_buy_dollars": "Steady buy every week no matter what (the accumulation core). 0 = pure timing, no steady buy.",
     "buy_dollars": "EXTRA dollars to buy each time SPY is 'low' (on top of any baseline).",
     "trim_pct": "Fraction of the OPPORTUNISTIC sleeve to sell when 'high'. The baseline core is never sold.",
@@ -42,8 +44,8 @@
   "_bot_allocation": {
     "_comment": "Whole-bot capital split + total bankroll (source of truth for live/paper sizing). The paper brains (live_spy.py, live.py) read this via allocation.py and size their orders to each sleeve. 'total_capital' is YOUR number to edit -- it's a simulated/paper bankroll for now; raise it (or top up) as you add money. Backtest math ignores this block.",
     "total_capital": 120,
-    "spy_accumulate_pct": 50,
+    "spy_accumulate_pct": 40,
     "pairs_pct": 40,
-    "swing_pct": 10
+    "swing_pct": 20
   }
 }

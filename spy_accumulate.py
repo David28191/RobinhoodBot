@@ -96,6 +96,15 @@ def trend_signal(px, ma_days, vol_lookback):
     return dist / sd
 
 
+def rolling_signal(px, ma_days, vol_lookback):
+    """Rolling-mean anchor (continuous, no weekly reset). Same z as spy_wtd's
+    rolling_frame: a price that keeps falling stays below its trailing mean, so
+    the dip signal persists through a MULTI-WEEK decline instead of resetting
+    each Monday like the 'weekly' signal does."""
+    from spy_wtd import rolling_frame
+    return rolling_frame(px, ma_days, vol_lookback)["z"]
+
+
 def build_signals(cfg, px):
     """Compute each distinct signal once, return {name: z-series}."""
     out = {}
@@ -104,8 +113,11 @@ def build_signals(cfg, px):
             out[name] = weekly_signal(px, cfg["weekly_vol_lookback"])
         elif name == "trend":
             out[name] = trend_signal(px, cfg["trend_ma_days"], cfg["trend_vol_lookback"])
+        elif name == "rolling":
+            out[name] = rolling_signal(px, cfg.get("rolling_ma_days", 10),
+                                       cfg.get("rolling_vol_lookback", 252))
         else:
-            raise ValueError(f"unknown signal '{name}' (use 'weekly' or 'trend')")
+            raise ValueError(f"unknown signal '{name}' (use 'weekly', 'trend', or 'rolling')")
     return out
 
 

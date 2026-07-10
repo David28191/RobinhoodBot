@@ -49,7 +49,33 @@ DATA = pairbot.DATA_DIR
 PRICES_FILE = os.path.join(DATA, "mcp_prices.json")
 STATE_FILE = os.path.join(DATA, "live_state.json")
 OUT_FILE = os.path.join(DATA, "intended_orders.json")
+JOURNAL_FILE = os.path.join(DATA, "bot_journal.jsonl")   # append-only run history
 SWING_CFG_FILE = os.path.join(HERE, "swing.json")
+
+
+def append_journal(result):
+    """Append ONE line per run to bot_journal.jsonl (never overwritten), so there
+    is a durable record of what the bot decided/ordered each run. `intended_orders`
+    are the orders handed to the executor; the routine should also append the
+    CONFIRMED fills (with broker order ids) after placing them -- see SKILL.md.
+    Returns the entry written."""
+    entry = {
+        "logged_at": dt.datetime.now().isoformat(timespec="seconds"),
+        "as_of": result.get("as_of"),
+        "bankroll": result.get("bankroll"),
+        "cash_before": result.get("cash_before"),
+        "cash_after_est": result.get("cash_after_est"),
+        "notes": result.get("notes", []),
+        "orders": [{"source": o.get("source"), "symbol": o.get("symbol"),
+                    "side": o.get("side"),
+                    "amount": o.get("dollar_amount") or o.get("quantity"),
+                    "reason": o.get("reason"), "ref_id": o.get("ref_id")}
+                   for o in result.get("intended_orders", [])],
+        "dropped": len(result.get("dropped_orders", [])),
+    }
+    with open(JOURNAL_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
+    return entry
 
 
 # ---------------------------------------------------------------------------
@@ -130,39 +156,44 @@ def decide_spy(cfg_acc, close, state, al):
 
 
 def decide_swing(cfg_swing, close, state, al):
-    """Swing sleeve on its own symbol (e.g. QQQ) -- one round-trip position at a
-    time, sized to the swing budget. Returns (orders, price, notes)."""
+    """Base+ladder swing sleeve on its own symbol (e.g. QQQ): always hold a base
+    long, then ADD on weekly dips / TRIM on weekly rips AROUND it (never selling
+    the base). Sized to the swing budget. Returns (orders, price, notes)."""
     sym = cfg_swing["symbol"]
     if sym not in close.columns:
         return [], None, [f"swing {sym}: no data — skipped"]
     px = close[sym].dropna()
-    wf = spy_wtd.weekly_frame(px, cfg_swing["vol_lookback_weeks"])
+    wf = spy_wtd.swing_frame(cfg_swing, px)
     price = float(px.iloc[-1])
     notes = []
 
     # Robinhood is the source of truth: reconcile the ledger against REAL shares.
-    # A state that says "open" with no real position is stale (an entry that was
-    # decided but never placed/filled) and would otherwise wedge the sleeve flat
-    # forever, then emit an unfillable SELL. Mutates `state` so the reset is
-    # persisted via updated_state.json.
+    # Mutates `state` so the reconciliation is persisted via updated_state.json.
     real_q = float(state.get("shares", {}).get(sym) or 0.0)
-    sw_state = state.get("swing", {})
-    if sw_state.get("open") and real_q <= 0:
-        notes.append(f"swing {sym}: state said open but account holds no {sym} "
-                     f"-- stale entry, reset to flat")
-        state["swing"] = sw_state = {}
-    elif not sw_state.get("open") and real_q > 0:
-        notes.append(f"swing {sym}: account holds {real_q:.6f} {sym} the state doesn't "
-                     f"track -- OPEN blocked until reconciled (no double-buy)")
-        return [], price, notes
+    sw = state.get("swing", {}) or {}
+    if sw.get("base_established") and real_q <= 0:
+        # ledger thinks we hold a base but the account is empty -> stale; drop it
+        # so the base gets re-established this run instead of wedging.
+        notes.append(f"swing {sym}: ledger holds a base but account has no {sym} "
+                     f"-- stale, reset (will re-establish the base)")
+        state["swing"] = sw = {}
+    elif not sw.get("base_established") and real_q > 0:
+        # untracked {sym} already in the account -> adopt it AS the base (no
+        # double-buy); the ladder then trades around it.
+        sw = {"base_shares": round(real_q, spy_wtd.SHARE_DECIMALS), "trade_shares": 0.0,
+              "trade_basis": 0.0, "steps": 0, "base_established": True,
+              "last_action_date": None}
+        state["swing"] = sw
+        notes.append(f"swing {sym}: adopted existing {real_q:.6f} {sym} as the base "
+                     f"(now trading around it)")
 
-    capital = al.get("swing_budget", 0)
-    orders = spy_wtd.swing_live_decide(cfg_swing, wf, sw_state, capital)
+    budget = al.get("swing_budget", 0)
+    orders = spy_wtd.swing_ladder_decide(cfg_swing, wf, sw, budget)
     zlast = float(wf["z"].iloc[-1]) if not np.isnan(wf["z"].iloc[-1]) else float("nan")
     if orders:
         notes.append(f"swing {sym} z={zlast:+.2f} -> {orders[0]['action']} ({orders[0]['reason']})")
     else:
-        held = "holding" if sw_state.get("open") else "flat"
+        held = f"base+{int(sw.get('steps', 0))} step(s)" if sw.get("base_established") else "flat"
         notes.append(f"swing {sym} z={zlast:+.2f} ({held}) -> no action")
     return orders, price, notes
 
@@ -204,19 +235,17 @@ def to_broker_orders(pair_orders, spy_orders, swing_orders, swing_symbol, state,
             out.append({**base, "side": "sell", "quantity": f"{o['shares']:.6f}",
                         "bucket": o.get("bucket")})
 
-    # --- swing sleeve (one round-trip on swing_symbol, e.g. QQQ) ---
+    # --- swing sleeve (base + ladder on swing_symbol, e.g. QQQ) ---
     for o in swing_orders:
         base = {"ref_id": str(uuid.uuid4()), "source": "swing",
                 "reason": o["reason"], "account_number": account,
                 "symbol": swing_symbol, "type": "market"}
-        if o["side"] == "BUY":
+        if o["side"] == "BUY":                   # BASE_BUY / ADD -> dollar-sized buy
             out.append({**base, "side": "buy", "dollar_amount": f"{o['dollars']:.2f}"})
-        elif o["side"] == "SELL":               # exit -> sell the full real position
-            q = shares.get(swing_symbol)
-            sell = {**base, "side": "sell", "sell_full_position": True}
-            if q:
-                sell["quantity"] = f"{float(q):.6f}"
-            out.append(sell)
+        elif o["side"] == "SELL":                # TRIM one step -> sell a SPECIFIC qty
+            # NOT sell_full_position: the base is a protected floor and must never
+            # be sold. Only the trimmed step quantity goes out.
+            out.append({**base, "side": "sell", "quantity": f"{o['shares']:.6f}"})
     return out
 
 
@@ -280,14 +309,9 @@ def main():
                               "entry_z": o["z"], "legs": o["legs"]}
         elif o["action"] == "CLOSE":
             pos.pop(o["pair"], None)
+    sw = new_state.setdefault("swing", {})
     for o in swing_orders:
-        if o["action"] == "OPEN":
-            sh = round(o["dollars"] / swing_price, 6) if swing_price else 0.0
-            new_state["swing"] = {"open": True, "entry_date": today.isoformat(),
-                                  "entry_price": o["price"], "frozen_anchor": o["frozen_anchor"],
-                                  "frozen_sigma": o["frozen_sigma"], "shares": sh}
-        elif o["action"] == "CLOSE":
-            new_state["swing"] = {}
+        spy_wtd.apply_swing_ladder(o, sw, swing_price)
     with open(os.path.join(DATA, "updated_state.json"), "w") as f:
         json.dump(new_state, f, indent=2)
 
@@ -304,9 +328,11 @@ def main():
     }
     with open(OUT_FILE, "w") as f:
         json.dump(result, f, indent=2)
+    append_journal(result)                       # durable, append-only run history
 
     print(json.dumps(result, indent=2))
     print(f"\n[{len(broker)} intended order(s); {len(dropped)} dropped] -> {OUT_FILE}")
+    print(f"[journal] appended run to {JOURNAL_FILE}")
 
 
 if __name__ == "__main__":

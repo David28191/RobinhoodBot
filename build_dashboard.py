@@ -262,12 +262,18 @@ def build():
       <p class="muted small">⚠ long-only = opening a pair is an outright LONG of the cheap leg's sector — see the sector tags in Recommendations.</p>"""
 
     swing_open = any(s == "Swing" for (s, *_rest) in pos_rows)
+    _base_pct = swing_cfg.get('base_pct', 0.25)
+    _base_amt = al['swing_budget'] * _base_pct
     swing_tab = f"""
-      <h2>QQQ Swing <span class="muted">— fade weekly dips, round-trip</span></h2>
-      <p>Buy <b>{money(al['swing_budget'])}</b> of QQQ when the week is ≤ −{swing_cfg.get('entry_z')}σ;
-         sell the whole position on revert (≤{swing_cfg.get('exit_z')}σ) / stop ({swing_cfg.get('stop_z')}σ) / {swing_cfg.get('max_days')}d.</p>
+      <h2>QQQ Swing <span class="muted">— base + trade around it (always net long)</span></h2>
+      <p>Hold a permanent <b>{money(_base_amt)}</b> base of QQQ ({_base_pct*100:.0f}% of the sleeve, never sold),
+         then trade the other {money(al['swing_budget']-_base_amt)} around it in {swing_cfg.get('n_steps')} steps using a
+         <b>z-banded exposure ladder</b> on a {swing_cfg.get('anchor_window_days','?')}-day rolling-mean anchor —
+         bigger moves move more steps at once, small moves (inside ±1σ) do nothing.
+         <b>Add</b> on dips / <b>trim</b> on rips: {', '.join(f'{z:+g}σ→{s}' for z,s in swing_cfg.get('add_ladder',[]))} steps
+         (rips mirror back toward the base). Deployed ranges {money(_base_amt)}→{money(al['swing_budget'])}.</p>
       <p class="muted">Budget {money(al['swing_budget'])} ({al['swing_pct']:.0f}%) &middot; status:
-         <b>{'HOLDING' if swing_open else 'flat (waiting for a dip)'}</b> &middot; QQQ ${quotes.get('QQQ','—')}</p>
+         <b>{'HOLDING (base + steps)' if swing_open else 'flat (will establish base)'}</b> &middot; QQQ ${quotes.get('QQQ','—')}</p>
       {pos_table('Swing')}"""
 
     # =====================================================================
