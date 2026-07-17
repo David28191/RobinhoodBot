@@ -90,6 +90,66 @@ def decide(pair, z, position, today):
     stop_z, max_days = pair.get("stop_z"), pair.get("max_days")
     capital = pair["capital_per_leg"]
 
+    # --- long_only pairs = BASE + z-ladder ROTATION (this IS the pair trade) ---
+    # Hold a base ($capital_per_leg) in the cheap leg; ADD fixed $step_dollars
+    # steps as the spread diverges further past entry_z (up to n_steps), TRIM
+    # them back as it converges, and ROTATE the whole book into the other leg at
+    # the opposite extreme. cooldown_days gates add/trim. FIXED dollar steps (not
+    # scaled to the account). n_steps:0 collapses to a plain flat rotation.
+    if mode == "long_only":
+        step_dollars = float(pair.get("step_dollars", 0))
+        n_steps = int(pair.get("n_steps", 0))
+        step_offsets = pair.get("step_offsets", [])
+        cooldown = int(pair.get("cooldown_days", 0))
+
+        if position is None:                     # flat -> enter the cheap leg's base
+            if z <= -entry_z:
+                direction = +1
+            elif z >= entry_z:
+                direction = -1
+            else:
+                return None
+            tkr = a if direction == +1 else b
+            return {"pair": name, "action": "OPEN", "direction": direction,
+                    "z": round(z, 2), "steps": 0, "reason": "enter cheap-leg base",
+                    "legs": [{"ticker": tkr, "side": "BUY", "dollars": capital}]}
+
+        held = position["direction"]
+        steps = int(position.get("steps", 0))
+        held_tkr = a if held == +1 else b
+        depth = (-z) if held == +1 else z        # how cheap our held leg still is
+
+        if depth <= -entry_z:                    # opposite extreme -> ROTATE book
+            new_tkr = b if held == +1 else a
+            # BUY the new base FIRST, then SELL the whole old book, so a failed
+            # buy leaves us still holding the old leg (never a naked half-close).
+            return {"pair": name, "action": "SWAP", "direction": -held,
+                    "z": round(z, 2), "steps": 0, "reason": "spread flipped -> rotate legs",
+                    "legs": [{"ticker": new_tkr, "side": "BUY", "dollars": capital},
+                             {"ticker": held_tkr, "side": "SELL", "sell_full": True}]}
+
+        # cooldown-gate the ladder so one multi-day move isn't chased every day
+        last = position.get("last_action_date")
+        days_since = (today - dt.date.fromisoformat(last)).days if last else 10 ** 9
+        if days_since < cooldown:
+            return None
+        target = pairbot.ladder_target_steps(depth, entry_z, step_offsets, n_steps)
+        if target is None or target == steps:
+            return None
+        if target > steps:                       # ADD steps of the held leg
+            dollars = (target - steps) * step_dollars
+            return {"pair": name, "action": "ADD", "direction": held,
+                    "z": round(z, 2), "steps": target,
+                    "reason": f"diverging z={z:+.2f}: {steps}->{target}/{n_steps} steps",
+                    "legs": [{"ticker": held_tkr, "side": "BUY", "dollars": dollars}]}
+        # TRIM steps back toward the base (sell a fraction of the trade tranche)
+        base_frac = capital + steps * step_dollars
+        trim_frac = round((steps - target) * step_dollars / base_frac, 6)
+        return {"pair": name, "action": "TRIM", "direction": held,
+                "z": round(z, 2), "steps": target,
+                "reason": f"converging z={z:+.2f}: {steps}->{target}/{n_steps} steps",
+                "legs": [{"ticker": held_tkr, "side": "SELL", "trim_fraction": trim_frac}]}
+
     if position is None:                         # flat -> maybe OPEN
         if z >= entry_z:
             direction = -1
@@ -242,10 +302,21 @@ def main():
         for o in orders:
             log_paper_order(o, today)
             name = o["pair"]
-            if o["action"] == "OPEN":
+            act = o["action"]
+            if act == "OPEN":
                 positions[name] = {"direction": o["direction"], "entry_date": today.isoformat(),
-                                   "entry_z": o["z"], "legs": o["legs"]}
-            else:
+                                   "entry_z": o["z"], "steps": o.get("steps", 0),
+                                   "last_action_date": today.isoformat(), "legs": o["legs"]}
+            elif act == "SWAP":
+                positions[name] = {"direction": o["direction"], "entry_date": today.isoformat(),
+                                   "entry_z": o["z"], "steps": 0,
+                                   "last_action_date": today.isoformat()}
+            elif act in ("ADD", "TRIM"):
+                p = positions.get(name, {})
+                p["steps"] = o.get("steps", p.get("steps", 0))
+                p["last_action_date"] = today.isoformat()
+                positions[name] = p
+            else:  # CLOSE (long_short)
                 positions.pop(name, None)
         save_positions(positions)
         print(f"\nPaper orders logged to: {ORDERS_LOG}")

@@ -3,6 +3,28 @@
 Notable changes to the autonomous trading bot. Newest first.
 (Account: Agentic cash `••••596618249`, ~$120, +$10/week deposits.)
 
+## 2026-07-16 — Pairs: base + z-ladder ROTATION (long-only pairs are now a real pair trade)
+### Changed — long_only pairs no longer exit to cash; they rotate + ladder
+- **Root cause of the "sold IBIT, never bought" report:** `long_only` pairs ran an
+  open-at-±entry / **close-to-cash** mean-reversion (`live.decide`), so a CLOSE was a lone
+  SELL. That isn't a pair trade. Replaced with a **continuous rotation**: always hold the
+  relatively-cheap leg, and at the OPPOSITE extreme **BUY the other leg then SELL the one we
+  hold** (buy-first, so a failed/underfunded buy can never leave a naked half-close).
+- **Base + z-ladder sizing around the held leg** (mirrors the QQQ swing sleeve): hold a
+  **base** (`capital_per_leg`), **ADD** fixed `step_dollars` steps as |z| diverges past
+  `entry_z + step_offsets` (up to `n_steps`), **TRIM** back as it converges (partial sell of
+  the trade tranche, never the base), rotate the whole book at the flip. `cooldown_days` gates
+  add/trim. **FIXED dollar steps** (not scaled to the account); the 40%-of-account
+  `pairs_budget` cap still gates OPEN/ADD and grows with deposits. New `pairs.json` keys:
+  `n_steps, step_dollars, step_offsets, cooldown_days`.
+- New logic: `pairbot.ladder_target_steps` + `_backtest_pair_ladder` (dashboard/backtest now
+  model the ladder); `live.decide` emits OPEN/ADD/TRIM/SWAP with a `steps` ledger;
+  `cloud_decide` sizes TRIM as a fraction of REAL shares, keeps SWAP legs atomic via a shared
+  `group` id in `cash_guard`, and **reconciles the pairs ledger against real shares** (drops a
+  phantom leg so it re-enters instead of wedging). BSOL/IBIT keeps `entry_z: 2.5` (wider band).
+- Backtest (2y, $15 base/$10 step, 6 pairs): ladder **$47.95** realized+open (66% win) vs flat
+  rotation $43.11 vs old exit-to-cash $26.64. Classic long/short pairs are unchanged.
+
 ## 2026-07-09 — QQQ swing redesign + rolling anchor (swing & accumulator) + allocation + journal
 ### Changed — QQQ swing = "base + trade around it"
 - Replaced the flat↔fully-in round-trip fade with an **always-net-long base+ladder**. Establishes a

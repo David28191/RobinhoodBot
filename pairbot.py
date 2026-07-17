@@ -122,12 +122,123 @@ def _direction_label(mode, direction, a, b):
 # ---------------------------------------------------------------------------
 # 4) BACKTEST
 # ---------------------------------------------------------------------------
+def ladder_target_steps(depth, entry_z, step_offsets, n_steps):
+    """How many ADD steps the current divergence calls for. `depth` = how cheap
+    our held leg still is (depth >= entry_z means in-signal). One threshold per
+    step at entry_z + offset; deeper divergence -> more steps (capped n_steps).
+    Monotone in depth, so it also drives the TRIM back down as depth shrinks."""
+    if depth is None or (isinstance(depth, float) and np.isnan(depth)):
+        return None
+    return min(int(n_steps), sum(1 for off in step_offsets if depth >= entry_z + off))
+
+
+def _backtest_pair_ladder(close, pair):
+    """long_only pairs as a BASE + z-ladder rotation (see pairs.json `_ladder`):
+    hold a base in the cheap leg, ADD steps as the spread diverges further, TRIM
+    as it converges, ROTATE the whole book to the other leg at the opposite
+    extreme. Average-cost accounting; decide on close, fill next session. Returns
+    (trades, daily cumulative-P&L Series, spread DataFrame) like backtest_pair."""
+    a, b = pair["a"], pair["b"]
+    sp = compute_spread(close, pair)
+    pa = close[a].reindex(sp.index); pb = close[b].reindex(sp.index)
+
+    entry_z = pair["entry_z"]
+    base_dollars = float(pair["capital_per_leg"])
+    step_dollars = float(pair.get("step_dollars", 0))
+    n_steps = int(pair.get("n_steps", 0))
+    step_offsets = pair.get("step_offsets", [])
+    cooldown = int(pair.get("cooldown_days", 0))
+    cost = pair.get("cost_bps", 0) / 10000.0
+
+    leg = 0                                  # 0 flat, +1 long A, -1 long B
+    base_sh = trade_sh = base_bz = trade_bz = 0.0
+    steps = 0
+    e_date = e_z = None                      # current leg's base entry
+    realized = 0.0
+    last_i = -10 ** 9
+    trades, daily = [], []
+    n = len(sp)
+
+    def px(i, which):
+        return pa.iat[i] if which == +1 else pb.iat[i]
+
+    def _row(kind, exit_date, exit_z, pnl, deployed):
+        trades.append({
+            "pair": pair["name"],
+            "direction": _direction_label("long_only", leg, a, b),
+            "entry_date": e_date.date().isoformat() if e_date is not None else "—",
+            "exit_date": exit_date, "days_held": (pd.Timestamp(exit_date) - e_date).days
+            if e_date is not None and exit_date != "(still open)" else 0,
+            "entry_z": round(float(e_z), 2) if e_z is not None else 0.0,
+            "exit_z": round(float(exit_z), 2),
+            "pnl": round(float(pnl), 2),
+            "return_pct": round(float(pnl / max(deployed, 1e-9) * 100), 2),
+            "result": ("OPEN" if kind == "open" else ("WIN" if pnl > 0 else "LOSS")),
+            "exit_reason": kind, "status": "OPEN" if kind == "open" else "CLOSED",
+        })
+
+    for i in range(n):
+        date, z = sp.index[i], sp["z"].iat[i]
+        has_next = i + 1 < n
+
+        if leg == 0:                                        # ---- flat: maybe enter
+            if has_next and not np.isnan(z) and abs(z) >= entry_z:
+                nl = +1 if z <= -entry_z else -1
+                f = px(i + 1, nl)
+                if not np.isnan(f):
+                    leg = nl; base_sh = base_dollars * (1 - cost) / f; base_bz = base_dollars
+                    trade_sh = trade_bz = 0.0; steps = 0
+                    e_date = sp.index[i + 1]; e_z = z; last_i = i + 1
+        else:                                               # ---- holding a leg
+            depth = (-z) if leg == +1 else z
+            fh = px(i + 1, leg) if has_next else np.nan
+            if has_next and not np.isnan(depth) and depth <= -entry_z and not np.isnan(fh):
+                # opposite extreme -> ROTATE the whole book into the other leg
+                pnl = (base_sh + trade_sh) * fh * (1 - cost) - (base_bz + trade_bz)
+                realized += pnl
+                _row("rotated", sp.index[i + 1].date().isoformat(), z, pnl, base_bz + trade_bz)
+                nl = -leg; fn = px(i + 1, nl)
+                leg = nl; base_sh = base_dollars * (1 - cost) / fn if not np.isnan(fn) else 0.0
+                base_bz = base_dollars; trade_sh = trade_bz = 0.0; steps = 0
+                e_date = sp.index[i + 1]; e_z = z; last_i = i + 1
+            elif has_next and (i - last_i) >= cooldown and not np.isnan(depth) and not np.isnan(fh):
+                tgt = ladder_target_steps(depth, entry_z, step_offsets, n_steps)
+                if tgt is not None and tgt > steps:                 # ADD
+                    dollars = (tgt - steps) * step_dollars
+                    trade_sh += dollars * (1 - cost) / fh; trade_bz += dollars
+                    steps = tgt; last_i = i + 1
+                elif tgt is not None and tgt < steps and trade_sh > 0:   # TRIM
+                    sell_sh = trade_sh * (steps - tgt) / steps
+                    avg = trade_bz / trade_sh
+                    pnl = sell_sh * fh * (1 - cost) - avg * sell_sh
+                    realized += pnl
+                    trade_sh -= sell_sh; trade_bz -= avg * sell_sh; steps = tgt; last_i = i + 1
+                    _row("trim", sp.index[i + 1].date().isoformat(), z, pnl, avg * sell_sh)
+
+        mtm = 0.0
+        if leg != 0 and not np.isnan(px(i, leg)):
+            mtm = (base_sh + trade_sh) * px(i, leg) - (base_bz + trade_bz)
+        daily.append((date, realized + mtm))
+
+    if leg != 0:                                            # surface the open book
+        last_px = px(n - 1, leg)
+        pnl = (base_sh + trade_sh) * last_px - (base_bz + trade_bz) if not np.isnan(last_px) else 0.0
+        _row("open", "(still open)", sp["z"].iloc[-1], pnl, base_bz + trade_bz)
+
+    daily_series = pd.Series({d: v for d, v in daily}, name=pair["name"]).astype(float)
+    return trades, daily_series, sp
+
+
 def backtest_pair(close, pair):
     """
     Walk forward day by day. Open a trade when |z| crosses entry_z,
     close it when z reverts past exit_z (or hits the stop_z loss guard).
     Returns: (list of trade dicts, daily cumulative-P&L Series).
+    long_only pairs use the base+ladder rotation (`_backtest_pair_ladder`).
     """
+    if pair.get("mode", "long_short") == "long_only":
+        return _backtest_pair_ladder(close, pair)
+
     a, b = pair["a"], pair["b"]
     sp = compute_spread(close, pair)
     pa = close[a].reindex(sp.index)
@@ -172,6 +283,32 @@ def backtest_pair(close, pair):
                 position, e_date, e_a, e_b, e_z = -1, f_date, fa, fb, z
             elif can_fill and z <= -entry_z:
                 position, e_date, e_a, e_b, e_z = +1, f_date, fa, fb, z
+        elif mode == "long_only":
+            # ROTATION: hold the cheap leg; when z hits the OPPOSITE extreme,
+            # book the held leg's trade and immediately rotate into the other
+            # leg at the same fill (never flat -> no exit-to-cash).
+            flip = ((position == +1 and z >= entry_z) or
+                    (position == -1 and z <= -entry_z))
+            if flip and can_fill:
+                pnl = _trade_pnl(mode, position, e_a, e_b, fa, fb, capital)
+                pnl -= round_trip_cost          # entry + exit spread/slippage
+                realized += pnl
+                trades.append({
+                    "pair": pair["name"],
+                    "direction": _direction_label(mode, position, a, b),
+                    "entry_date": e_date.date().isoformat(),
+                    "exit_date": f_date.date().isoformat(),
+                    "days_held": (f_date - e_date).days,
+                    "entry_z": round(float(e_z), 2),
+                    "exit_z": round(float(z), 2),
+                    "pnl": round(float(pnl), 2),
+                    "return_pct": round(float(pnl / capital * 100), 2),
+                    "result": "WIN" if pnl > 0 else "LOSS",
+                    "exit_reason": "rotated",
+                    "status": "CLOSED",
+                })
+                position = -position            # flip to the other leg
+                e_date, e_a, e_b, e_z = f_date, fa, fb, z
         else:
             held = (date - e_date).days
             hit_target = abs(z) <= exit_z

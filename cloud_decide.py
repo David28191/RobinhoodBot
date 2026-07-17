@@ -98,13 +98,23 @@ def prices_df(prices_json):
 # ---------------------------------------------------------------------------
 # Decide
 # ---------------------------------------------------------------------------
+def _pair_deployed(pair, pos):
+    """$ currently in a pair's book = base + steps * step_dollars."""
+    return (float(pair["capital_per_leg"])
+            + int(pos.get("steps", 0)) * float(pair.get("step_dollars", 0)))
+
+
 def decide_pairs(cfg, close, state, today, al):
-    """Mirror live.main()'s pair loop (budget + max_positions gating included)."""
+    """Mirror live.main()'s pair loop for the base+ladder rotation. OPEN and ADD
+    consume the pairs budget (gated); TRIM/SWAP free or recycle it. FIXED dollar
+    steps -- the growing budget just lets more pairs ladder, it does NOT resize a
+    step."""
     traded = cfg["pairs"]
+    cfg_by_name = {p["name"]: p for p in traded}
     positions = state.get("pairs_positions", {})
     pairs_budget = al["pairs_budget"]
-    deployed = sum(leg["dollars"] for p in positions.values()
-                   for leg in p["legs"] if leg["side"] == "BUY")
+    deployed = sum(_pair_deployed(cfg_by_name[nm], pos)
+                   for nm, pos in positions.items() if nm in cfg_by_name)
     max_positions = cfg.get("max_positions")
     open_slots = (max_positions - len(positions)) if max_positions is not None else None
 
@@ -115,25 +125,33 @@ def decide_pairs(cfg, close, state, today, al):
         except (KeyError, IndexError):
             notes.append(f"{pair['name']}: no data — skipped")
             continue
-        order = live.decide(pair, z, positions.get(pair["name"]), today)
+        prev = positions.get(pair["name"])
+        order = live.decide(pair, z, prev, today)
         if order is None:
             notes.append(f"{pair['name']}: z={z:+.2f} no action")
             continue
-        cost = sum(l["dollars"] for l in order["legs"] if l["side"] == "BUY")
-        if order["action"] == "OPEN" and open_slots is not None and open_slots <= 0:
+        act = order["action"]
+        buy_cost = sum(l["dollars"] for l in order["legs"]
+                       if l["side"] == "BUY" and "dollars" in l)
+        if act == "OPEN" and open_slots is not None and open_slots <= 0:
             notes.append(f"{pair['name']}: OPEN skipped (at max {max_positions})")
             continue
-        if order["action"] == "OPEN" and deployed + cost > pairs_budget:
-            notes.append(f"{pair['name']}: OPEN skipped (over ${pairs_budget:.0f} budget)")
+        if act in ("OPEN", "ADD") and deployed + buy_cost > pairs_budget:
+            notes.append(f"{pair['name']}: {act} skipped (over ${pairs_budget:.0f} pairs budget)")
             continue
-        notes.append(f"{pair['name']}: z={z:+.2f} -> {order['action']} ({order['reason']})")
+        notes.append(f"{pair['name']}: z={z:+.2f} -> {act} ({order['reason']})")
         orders.append(order)
-        if order["action"] == "OPEN":
+        if act == "OPEN":
             if open_slots is not None:
                 open_slots -= 1
-            deployed += cost
-        else:
-            deployed -= sum(l["dollars"] for l in order["legs"] if l["side"] == "SELL")
+            deployed += buy_cost
+        elif act == "ADD":
+            deployed += buy_cost
+        elif act == "TRIM":
+            freed = (int(prev.get("steps", 0)) - int(order["steps"])) * float(pair.get("step_dollars", 0))
+            deployed -= max(0.0, freed)
+        elif act == "SWAP":
+            deployed += float(pair["capital_per_leg"]) - _pair_deployed(pair, prev or {})
     return orders, notes
 
 
@@ -207,19 +225,31 @@ def to_broker_orders(pair_orders, spy_orders, swing_orders, swing_symbol, state,
 
     # --- pairs (long_only: legs are BUY $ / SELL $) ---
     for o in pair_orders:
+        # A SWAP's two legs share a group id so cash_guard can keep them atomic
+        # (never place the SELL if the paired BUY can't be funded).
+        group = str(uuid.uuid4()) if o["action"] == "SWAP" else None
         for leg in o["legs"]:
-            base = {"ref_id": str(uuid.uuid4()), "source": "pairs",
+            base = {"ref_id": str(uuid.uuid4()), "source": "pairs", "group": group,
                     "pair": o["pair"], "reason": f"{o['action']}:{o['reason']}",
                     "account_number": account, "symbol": leg["ticker"], "type": "market"}
             if leg["side"] == "BUY":
                 out.append({**base, "side": "buy", "dollar_amount": f"{leg['dollars']:.2f}"})
             elif leg["side"] == "SELL":
-                # CLOSE: sell the FULL real position of this ticker (use live shares)
                 q = shares.get(leg["ticker"])
-                sell = {**base, "side": "sell", "sell_full_position": True}
-                if q:
-                    sell["quantity"] = f"{float(q):.6f}"
-                out.append(sell)
+                if leg.get("trim_fraction") is not None:
+                    # TRIM: sell a FRACTION of the real held shares (never the base)
+                    sell = {**base, "side": "sell"}
+                    if q:
+                        sell["quantity"] = f"{float(q) * float(leg['trim_fraction']):.6f}"
+                    else:
+                        sell["note"] = "TRIM skipped: no real shares to size against"
+                    out.append(sell)
+                else:
+                    # SWAP/close: sell the FULL real position of this ticker
+                    sell = {**base, "side": "sell", "sell_full_position": True}
+                    if q:
+                        sell["quantity"] = f"{float(q):.6f}"
+                    out.append(sell)
             else:
                 out.append({**base, "side": leg["side"].lower(), "note": "SHORT/COVER unsupported in cash acct"})
 
@@ -250,13 +280,23 @@ def to_broker_orders(pair_orders, spy_orders, swing_orders, swing_symbol, state,
 
 
 def cash_guard(orders, cash):
-    """Drop buys that don't fit remaining real cash (most-conservative)."""
+    """Drop buys that don't fit remaining real cash (most-conservative). If a
+    dropped buy belongs to a SWAP group, drop that group's SELL too, so a
+    rotation can never half-execute (sell a leg without its paired buy). Relies
+    on the BUY leg being listed before the SELL leg (buy-first ordering)."""
     kept, dropped, remaining = [], [], float(cash)
+    dropped_groups = set()
     for o in orders:
+        grp = o.get("group")
+        if grp and grp in dropped_groups:
+            dropped.append({**o, "dropped_reason": "swap aborted (paired buy unfunded)"})
+            continue
         if o["side"] == "buy":
             amt = float(o.get("dollar_amount", 0))
             if amt > remaining + 1e-9:
                 dropped.append({**o, "dropped_reason": f"insufficient cash (${remaining:.2f} left)"})
+                if grp:
+                    dropped_groups.add(grp)
                 continue
             remaining -= amt
         kept.append(o)
@@ -286,12 +326,32 @@ def main():
     al = allocation.load_allocation(bankroll)
     max_run_spend = min(round(0.25 * bankroll, 2), 150.0)   # 25% of account, hard ceiling $150
 
+    # Reconcile pairs ledger against REAL shares (Robinhood = source of truth):
+    # if we think we hold a leg but the account has ~none of that ticker, drop
+    # the stale position so this run re-enters cleanly instead of wedging.
+    _shares = state.get("shares", {})
+    _cfgmap = {p["name"]: p for p in cfg_pairs["pairs"]}
+    recon_notes = []
+    for _nm, _p in list(state.get("pairs_positions", {}).items()):
+        _cf = _cfgmap.get(_nm)
+        if not _cf:
+            continue
+        _held = _cf["a"] if _p.get("direction") == +1 else _cf["b"]
+        if float(_shares.get(_held) or 0.0) <= 1e-6:
+            state["pairs_positions"].pop(_nm, None)
+            recon_notes.append(f"{_nm}: ledger held {_held} but account has none -> reset to flat")
+
     pair_orders, pair_notes = decide_pairs(cfg_pairs, close, state, today, al)
+    pair_notes = recon_notes + pair_notes
     spy_orders, spy_price, spy_week, spy_notes = decide_spy(cfg_acc, close, state, al)
     swing_orders, swing_price, swing_notes = decide_swing(cfg_swing, close, state, al)
 
     broker = to_broker_orders(pair_orders, spy_orders, swing_orders, cfg_swing["symbol"], state, account)
     broker, dropped, cash_left = cash_guard(broker, min(float(state.get("cash", 0)), max_run_spend))
+    # Pairs whose order was (partially) dropped for cash must NOT update the
+    # optimistic ledger below -- otherwise a swap that never placed would record
+    # us into the new leg and poison next run (the classic stale-state bug).
+    dropped_pairs = {o.get("pair") for o in dropped if o.get("source") == "pairs"}
 
     # Optimistic post-trade state (assumes the market orders fill) so the live
     # routine can persist an accurate ledger AFTER it confirms the places.
@@ -304,10 +364,19 @@ def main():
         live_spy.apply_paper(o, sp, spy_week, spy_price)
     pos = new_state.setdefault("pairs_positions", {})
     for o in pair_orders:
-        if o["action"] == "OPEN":
+        if o["pair"] in dropped_pairs:
+            continue                              # order didn't place -> don't move the ledger
+        act = o["action"]
+        if act in ("OPEN", "SWAP"):
             pos[o["pair"]] = {"direction": o["direction"], "entry_date": today.isoformat(),
-                              "entry_z": o["z"], "legs": o["legs"]}
-        elif o["action"] == "CLOSE":
+                              "entry_z": o["z"], "steps": int(o.get("steps", 0)),
+                              "last_action_date": today.isoformat()}
+        elif act in ("ADD", "TRIM"):
+            p = pos.get(o["pair"], {})
+            p["steps"] = int(o.get("steps", p.get("steps", 0)))
+            p["last_action_date"] = today.isoformat()
+            pos[o["pair"]] = p
+        elif act == "CLOSE":
             pos.pop(o["pair"], None)
     sw = new_state.setdefault("swing", {})
     for o in swing_orders:

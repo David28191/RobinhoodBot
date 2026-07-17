@@ -9,7 +9,12 @@
     "stop_z": 3.5,
     "max_days": 90,
     "capital_per_leg": 15,
-    "cost_bps": 5
+    "cost_bps": 5,
+    "_ladder": "long_only pairs hold a BASE (capital_per_leg) in the cheap leg, then ADD step_dollars per step as |z| diverges past entry_z+offset (up to n_steps), TRIM back as it converges, and rotate the whole book to the other leg at the opposite extreme. cooldown_days gates add/trim. n_steps:0 = flat rotation.",
+    "n_steps": 2,
+    "step_dollars": 10,
+    "step_offsets": [0.5, 1.0],
+    "cooldown_days": 3
   },
 
   "history_period": "2y",
@@ -20,7 +25,7 @@
     { "a": "JPM",  "b": "WFC"  },
     { "a": "XOM",  "b": "CVX"  },
     { "a": "V",    "b": "MA"   },
-    { "a": "BSOL", "b": "IBIT", "lookback": 30 },
+    { "a": "BSOL", "b": "IBIT", "lookback": 30, "entry_z": 2.5 },
     { "a": "NVDA", "b": "TSM"  }
   ],
 
