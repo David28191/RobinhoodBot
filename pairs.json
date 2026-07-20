@@ -39,6 +39,7 @@
     { "a": "KO",   "b": "PEP"  },
     { "a": "MRK",  "b": "LLY"  },
     { "a": "HD",   "b": "LOW"  },
-    { "a": "TSLA", "b": "IBIT" }
+    { "a": "TSLA", "b": "IBIT" },
+    { "a": "TRV",  "b": "CB"   }
   ]
 }
