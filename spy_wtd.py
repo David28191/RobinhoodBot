@@ -106,12 +106,26 @@ def rolling_frame(px, mean_window, z_lookback):
     return pd.DataFrame({"price": px, "anchor": mean, "sigma": sigma, "z": z})
 
 
+def drawdown_frame(px, hi_window):
+    """Drawdown-from-trailing-high frame. For each day:
+      anchor = trailing `hi_window`-day high of close
+      z      = price/anchor - 1   (<= 0; the FRACTIONAL drawdown, e.g. -0.06 = 6% below the high)
+    Transparent, magnitude-native 'buy all dips' signal: deeper drawdown -> more negative z ->
+    the ladder deploys more. Re-arms as price climbs back near a new high (z -> 0). No look-ahead
+    (trailing max only). `sigma` is unused here (kept for frame-shape compatibility)."""
+    hi = px.rolling(int(hi_window), min_periods=1).max()
+    z = px / hi - 1.0
+    return pd.DataFrame({"price": px, "anchor": hi, "sigma": np.nan, "z": z})
+
+
 def swing_frame(cfg, px):
-    """Build the weekly-to-date frame the swing/accumulator z uses, picking the
-    anchor style from cfg["anchor"]: 'rolling'/'rolling_weekly_mean' -> rolling_frame
-    (continuous mean, captures multi-week trends); anything else -> weekly_frame
-    (prior-Friday anchor that resets each Monday, the original behavior)."""
+    """Build the frame the swing z uses, picking the anchor style from cfg["anchor"]:
+      'drawdown'            -> drawdown_frame (z = % below the trailing high; transparent, magnitude-native)
+      'rolling'/'rolling_*' -> rolling_frame  (continuous mean, vol-normalised z)
+      anything else         -> weekly_frame   (prior-Friday anchor that resets each Monday)."""
     anchor = str(cfg.get("anchor", "weekly_reset")).lower()
+    if anchor.startswith("drawdown"):
+        return drawdown_frame(px, int(cfg.get("hi_window_days", 20)))
     if anchor.startswith("rolling"):
         return rolling_frame(px, int(cfg.get("anchor_window_days", 5)),
                              int(cfg.get("z_lookback_days", 252)))

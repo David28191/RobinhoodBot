@@ -206,6 +206,30 @@ def decide_swing(cfg_swing, close, state, al):
                      f"(now trading around it)")
 
     budget = al.get("swing_budget", 0)
+
+    # RECONCILE the ladder step-count from REAL shares (Robinhood = source of truth). The ledger's
+    # optimistic post-trade state can drift ABOVE reality if an add was capped/dropped and never
+    # filled -- leaving steps pinned at 'full' so the ladder thinks it's maxed and stops buying dips
+    # (the exact bug that made it sit out a QQQ selloff). Derive the TRUE step count from the real
+    # trade shares (real_q - base) each run so any drift self-heals and dip-buying can never wedge.
+    if sw.get("base_established") and real_q > 0 and price > 0:
+        _base_pct = float(cfg_swing.get("base_pct", 0.25))
+        _n_steps = int(cfg_swing.get("n_steps", 3))
+        _step_dollars = (budget * (1 - _base_pct) / _n_steps) if _n_steps else 0.0
+        _step_sh = (_step_dollars / price) if _step_dollars > 0 else 0.0
+        _base_sh = float(sw.get("base_shares", 0.0) or 0.0)
+        _actual_trade_sh = max(0.0, real_q - _base_sh)
+        _actual_steps = int(round(_actual_trade_sh / _step_sh)) if _step_sh > 0 else 0
+        _actual_steps = max(0, min(_n_steps, _actual_steps))
+        _old_steps = int(sw.get("steps", 0))
+        if _actual_steps != _old_steps or abs(_actual_trade_sh - float(sw.get("trade_shares", 0.0) or 0.0)) > 1e-4:
+            notes.append(f"swing {sym}: reconciled steps {_old_steps}->{_actual_steps} from real "
+                         f"{real_q:.6f} sh (ledger drift corrected)")
+            sw["trade_shares"] = round(_actual_trade_sh, spy_wtd.SHARE_DECIMALS)
+            sw["steps"] = _actual_steps
+            sw["trade_basis"] = round(_actual_trade_sh * price, 2)   # true basis unknown post-hoc; approx at current px
+            state["swing"] = sw
+
     orders = spy_wtd.swing_ladder_decide(cfg_swing, wf, sw, budget)
     zlast = float(wf["z"].iloc[-1]) if not np.isnan(wf["z"].iloc[-1]) else float("nan")
     if orders:

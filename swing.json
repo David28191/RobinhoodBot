@@ -1,5 +1,5 @@
 {
-  "_comment": "QQQ SWING sleeve, v2 = 'base + trade around it' oscillator (always net long), with a Z-BANDED EXPOSURE LADDER so the step size scales with the size of the weekly move: aggressive on big dips/rips, gentle (or nothing) on small ones. Holds a permanent BASE long (base_pct of the swing budget, a protected floor NEVER sold). The other (1-base_pct) trades AROUND it, split into n_steps equal steps. add_ladder/trim_ladder map the weekly-to-date z to a TARGET number of deployed steps: on the dip side deeper z -> higher target (buy more); on the rip side higher z -> lower target (sell more). The gap between +/-1sigma and 0 is a DEAD-BAND where small moves do nothing. A big move jumps straight to a further target => several steps in ONE order; a small move moves one step. cooldown_days gates add/trim (not the base). long_only. 'capital' is a fallback; live sizing uses allocation.py swing_budget (swing_pct of real account value). Deployed ranges base_pct*budget (0 steps) up to full budget (n_steps).",
+  "_comment": "QQQ SWING sleeve — 'base + z-ladder' (always net long). Holds a permanent BASE long (base_pct of the swing budget, a protected floor NEVER sold). The other (1-base_pct) is deployed in n_steps as QQQ dips below its rolling 10-day mean: add_ladder maps the vol-normalised deviation z (ln(price/10d-mean)/rolling_std) to a TARGET number of deployed steps — deeper dip => more steps => more capital, so a SHALLOW dip nibbles one step and a DEEP dip deploys the whole sleeve (magnitude-scaled, buys all dips). Shallow rungs added (-0.5σ) so even small dips buy a little. trim_ladder sells the trade sleeve back toward the base on a strong RIP (+2.5σ) to re-arm. Backtest (QQQ 2.5y, $24): +60% vs +49-53% for a raw %-drawdown ladder, which churned 25-52x — the rolling-mean z is smoother and captures multi-week dips without round-tripping. cooldown_days gates add/trim (not the base). long_only. Live sizing uses allocation.py swing_budget; 'capital' is a backtest fallback. Steps are RECONCILED from real QQQ shares each run (cloud_decide.decide_swing) so a drifted/optimistic ledger can't wedge the ladder at 'full' (the bug that made it sit out a selloff).",
   "symbol": "QQQ",
   "anchor": "rolling_weekly_mean",
   "anchor_window_days": 10,
@@ -7,8 +7,8 @@
   "vol_lookback_weeks": 52,
   "mode": "base_ladder",
   "base_pct": 0.50,
-  "n_steps": 3,
-  "add_ladder": [[-0.8, 1], [-1.5, 2], [-2.0, 3]],
+  "n_steps": 4,
+  "add_ladder": [[-0.5, 1], [-1.0, 2], [-1.5, 3], [-2.0, 4]],
   "trim_ladder": [[2.5, 2], [4.0, 0]],
   "cooldown_days": 3,
   "capital": 24,
