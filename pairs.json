@@ -27,7 +27,8 @@
     { "a": "V",    "b": "MA"   },
     { "a": "BSOL", "b": "IBIT", "lookback": 30, "entry_z": 2.5 },
     { "a": "NVDA", "b": "TSM"  },
-    { "a": "DUK",  "b": "SO"   }
+    { "a": "DUK",  "b": "SO"   },
+    { "a": "GS",   "b": "MS"   }
   ],
 
   "watchlist": [
