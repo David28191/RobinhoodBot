@@ -40,9 +40,8 @@ import pandas as pd
 import pairbot
 import allocation
 import live                      # reuse live.decide (pairs) -- pure function
-import live_spy                  # reuse live_spy.decide (SPY) -- pure function
-import spy_accumulate as A
-import spy_wtd
+import spy_wtd                   # swing engine (base + z-ladder)
+import tank                      # TANK accumulator — replaced the retired SPY weekly-DCA sleeve (2026-08-15)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = pairbot.DATA_DIR
@@ -155,24 +154,6 @@ def decide_pairs(cfg, close, state, today, al):
     return orders, notes
 
 
-def decide_spy(cfg_acc, close, state, al):
-    """Mirror live_spy.main()'s single-strategy decision."""
-    strat = cfg_acc["strategies"][0]
-    px = close[cfg_acc["symbol"]].dropna()
-    z = A.build_signals(cfg_acc, px)[strat["signal"]]
-    z_now = float(z.dropna().iloc[-1])
-    price = float(px.iloc[-1])
-    week_str = str(px.index[-1].to_period("W-FRI"))
-    sp = state.get("spy", {"core_shares": 0.0, "sleeve_shares": 0.0, "sleeve_basis": 0.0,
-                           "net_deployed": 0.0, "last_base_week": None, "last_action_date": None})
-    remaining = round(al["spy_budget"] - sp.get("net_deployed", 0.0), 2)
-    orders = live_spy.decide(cfg_acc, strat, z_now, week_str, price, sp, remaining)
-    real = [o for o in orders if o["action"] != "SKIP"]
-    notes = [f"SPY z={z_now:+.2f} price=${price:.2f} week={week_str} -> "
-             + (", ".join(f"{o['action']} ${o['dollars']:.2f}" for o in real) if real else "no order")]
-    return real, price, week_str, notes
-
-
 def decide_swing(cfg_swing, close, state, al):
     """Base+ladder swing sleeve on its own symbol (e.g. QQQ): always hold a base
     long, then ADD on weekly dips / TRIM on weekly rips AROUND it (never selling
@@ -243,7 +224,7 @@ def decide_swing(cfg_swing, close, state, al):
 # ---------------------------------------------------------------------------
 # Turn internal decisions into broker-ready intended orders (dollar/share sized)
 # ---------------------------------------------------------------------------
-def to_broker_orders(pair_orders, spy_orders, swing_orders, swing_symbol, state, account):
+def to_broker_orders(pair_orders, tank_orders, swing_orders, swing_symbol, state, account):
     shares = state.get("shares", {})
     out = []
 
@@ -277,17 +258,20 @@ def to_broker_orders(pair_orders, spy_orders, swing_orders, swing_symbol, state,
             else:
                 out.append({**base, "side": leg["side"].lower(), "note": "SHORT/COVER unsupported in cash acct"})
 
-    # --- SPY accumulator ---
-    for o in spy_orders:
-        base = {"ref_id": str(uuid.uuid4()), "source": "spy",
+    # --- TANK accumulator (buy tanks / trim bounces / melt-ice-cube core buy) ---
+    for o in tank_orders:
+        base = {"ref_id": str(uuid.uuid4()), "source": "tank",
                 "reason": o["reason"], "account_number": account,
-                "symbol": "SPY", "type": "market"}
-        if o["side"] == "BUY":
-            out.append({**base, "side": "buy", "dollar_amount": f"{o['dollars']:.2f}",
-                        "bucket": o.get("bucket")})
-        elif o["side"] == "SELL":      # TRIM -> sell a share quantity
-            out.append({**base, "side": "sell", "quantity": f"{o['shares']:.6f}",
-                        "bucket": o.get("bucket")})
+                "symbol": o["symbol"], "type": "market"}
+        if o["side"] == "BUY":         # tank buy or backstop core buy -> dollar-sized
+            out.append({**base, "side": "buy", "dollar_amount": f"{o['dollars']:.2f}"})
+        elif o["side"] == "SELL":      # bounce TRIM -> sell the tranche, capped to REAL shares
+            real = float(shares.get(o["symbol"]) or 0.0)
+            qty = min(float(o["shares"]), real)
+            if qty > 1e-6:
+                out.append({**base, "side": "sell", "quantity": f"{qty:.6f}"})
+            else:
+                out.append({**base, "side": "sell", "note": "TRIM skipped: no real shares to size against"})
 
     # --- swing sleeve (base + ladder on swing_symbol, e.g. QQQ) ---
     for o in swing_orders:
@@ -340,7 +324,7 @@ def main():
     today = dt.date.today()
 
     cfg_pairs = pairbot.load_config()
-    cfg_acc = A.load_config()
+    cfg_tank = tank.load_config()
     with open(SWING_CFG_FILE) as f:
         cfg_swing = json.load(f)
 
@@ -367,10 +351,22 @@ def main():
 
     pair_orders, pair_notes = decide_pairs(cfg_pairs, close, state, today, al)
     pair_notes = recon_notes + pair_notes
-    spy_orders, spy_price, spy_week, spy_notes = decide_spy(cfg_acc, close, state, al)
+
+    # TANK reconciliation (Robinhood = source of truth): drop a tank position the account no longer
+    # actually holds so a stale ledger can't phantom-trim or wedge. A buy dropped by cash_guard also
+    # self-heals here next run (no real shares -> position reset).
+    tank_recon = []
+    _tank_pos = state.setdefault("tank", {"positions": {}, "last_buy_date": None}).setdefault("positions", {})
+    for _sym in list(_tank_pos.keys()):
+        if float(_shares.get(_sym) or 0.0) <= 1e-6:
+            _tank_pos.pop(_sym, None)
+            tank_recon.append(f"tank {_sym}: ledger held but account has none -> reset")
+    tank_orders, tank_notes, tank_led = tank.decide(cfg_tank, close, state, al["tank_budget"], today)
+    tank_notes = tank_recon + tank_notes
+
     swing_orders, swing_price, swing_notes = decide_swing(cfg_swing, close, state, al)
 
-    broker = to_broker_orders(pair_orders, spy_orders, swing_orders, cfg_swing["symbol"], state, account)
+    broker = to_broker_orders(pair_orders, tank_orders, swing_orders, cfg_swing["symbol"], state, account)
     broker, dropped, cash_left = cash_guard(broker, min(float(state.get("cash", 0)), max_run_spend))
     # Pairs whose order was (partially) dropped for cash must NOT update the
     # optimistic ledger below -- otherwise a swap that never placed would record
@@ -381,11 +377,7 @@ def main():
     # routine can persist an accurate ledger AFTER it confirms the places.
     import copy
     new_state = copy.deepcopy(state)
-    sp = new_state.setdefault("spy", {"core_shares": 0.0, "sleeve_shares": 0.0,
-                                      "sleeve_basis": 0.0, "net_deployed": 0.0,
-                                      "last_base_week": None, "last_action_date": None})
-    for o in spy_orders:
-        live_spy.apply_paper(o, sp, spy_week, spy_price)
+    new_state["tank"] = tank_led            # tank.decide already produced the post-trade ledger
     pos = new_state.setdefault("pairs_positions", {})
     for o in pair_orders:
         if o["pair"] in dropped_pairs:
@@ -415,7 +407,7 @@ def main():
         "max_run_spend": max_run_spend,
         "cash_before": state.get("cash"),
         "cash_after_est": round(cash_left, 2),
-        "notes": spy_notes + pair_notes + swing_notes,
+        "notes": tank_notes + pair_notes + swing_notes,
         "intended_orders": broker,
         "dropped_orders": dropped,
     }

@@ -29,19 +29,21 @@ def load_allocation(bankroll=None):
         block = json.load(f).get("_bot_allocation", {})
 
     total = float(bankroll) if bankroll is not None else float(block.get("total_capital", 1000))
-    spy_pct = float(block.get("spy_accumulate_pct", 60))
-    pairs_pct = float(block.get("pairs_pct", 40))
-    swing_pct = float(block.get("swing_pct", 0))
-    denom = spy_pct + pairs_pct + swing_pct
+    # SPY weekly-DCA accumulator retired 2026-08-15; its share became the TANK sleeve.
+    # Back-compat: if an old config still has spy_accumulate_pct, fold it into tank.
+    tank_pct = float(block.get("tank_pct", block.get("spy_accumulate_pct", 40)))
+    pairs_pct = float(block.get("pairs_pct", 35))
+    swing_pct = float(block.get("swing_pct", 25))
+    denom = tank_pct + pairs_pct + swing_pct
     if denom <= 0:                                   # guard against a 0/0 config
-        spy_pct, pairs_pct, swing_pct, denom = 60.0, 40.0, 0.0, 100.0
+        tank_pct, pairs_pct, swing_pct, denom = 40.0, 35.0, 25.0, 100.0
 
     return {
         "total": total,
-        "spy_pct": spy_pct,
+        "tank_pct": tank_pct,
         "pairs_pct": pairs_pct,
         "swing_pct": swing_pct,
-        "spy_budget": round(total * spy_pct / denom, 2),
+        "tank_budget": round(total * tank_pct / denom, 2),
         "pairs_budget": round(total * pairs_pct / denom, 2),
         "swing_budget": round(total * swing_pct / denom, 2),
     }
@@ -50,7 +52,7 @@ def load_allocation(bankroll=None):
 def summary_line(al=None):
     al = al or load_allocation()
     return (f"Bankroll ${al['total']:,.0f}  ->  "
-            f"SPY accumulator {al['spy_pct']:.0f}% = ${al['spy_budget']:,.0f}   |   "
+            f"Tank {al['tank_pct']:.0f}% = ${al['tank_budget']:,.0f}   |   "
             f"Pairs {al['pairs_pct']:.0f}% = ${al['pairs_budget']:,.0f}   |   "
             f"Swing {al['swing_pct']:.0f}% = ${al['swing_budget']:,.0f}")
 

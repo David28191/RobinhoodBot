@@ -1,0 +1,31 @@
+{
+  "_comment": "TANK ACCUMULATOR sleeve — active 'buy the tank, sell the bounce' + melt-ice-cube backstop. Holds a CORE (never sold); strikes with dry powder when a WATCH name has fallen a lot (drawdown ladder + deep RSI(2)); trims the opportunistic tranche back on the bounce; if nothing tanks for backstop_days, deploys a chunk into the core so cash never rots. Long-only (cash account). Sizes off the tank sleeve budget in allocation.py. Edit knobs here, git push.",
+
+  "core": ["SPY", "QQQ"],
+  "watch": ["SPY","QQQ","NVDA","TSLA","AMD","AVGO","META","AMZN","NFLX","GOOGL","MSFT",
+            "PLTR","COIN","SMCI","MU","QCOM","UBER","CRWD","NET","MRVL"],
+
+  "unit_dollars": 3.5,
+  "dd_ladder": [[-0.05, 1], [-0.08, 2], [-0.12, 3], [-0.18, 4]],
+  "rsi_len": 2,
+  "rsi_tank": 10,
+  "trim_rsi": 70,
+  "hi_lookback": 20,
+  "ma_exit": 5,
+  "cooldown_days": 2,
+  "max_names": 4,
+  "backstop_days": 15,
+  "backstop_dollars": 10,
+  "cost_bps": 2,
+
+  "_param_help": {
+    "unit_dollars": "$ per ladder 'unit'. A 4-unit deep tank buys 4x this. Scale with the account.",
+    "dd_ladder": "drawdown from the hi_lookback-day high -> target UNITS. Deeper fall = more units = bigger buy.",
+    "rsi_tank": "RSI(rsi_len) below this adds +1 unit (deep-oversold kicker).",
+    "trim_rsi": "on a bounce (RSI back above this, OR close above the ma_exit-day mean) TRIM the opportunistic tranche (core untouched).",
+    "max_names": "max simultaneous opportunistic tank positions (concentration cap).",
+    "cooldown_days": "min days between adds/trims on one name.",
+    "backstop_days": "if NO tank buy fires for this many days, deploy backstop_dollars into core[0] (melt-ice-cube: buy the melt-up so cash doesn't rot).",
+    "backstop_dollars": "$ deployed into the core when the backstop fires."
+  }
+}

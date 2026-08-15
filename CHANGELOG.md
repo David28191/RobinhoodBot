@@ -3,6 +3,30 @@
 Notable changes to the autonomous trading bot. Newest first.
 (Account: Agentic cash `••••596618249`, ~$120, +$10/week deposits.)
 
+## 2026-08-15 — TANK accumulator sleeve REPLACES the retired SPY weekly-DCA
+### Added — TANK sleeve (active: buy the tank, sell the bounce, melt-ice-cube backstop)
+- New `tank.py` + `tank.json`. Holds a **core** (SPY/QQQ, never sold); strikes with dry powder when a
+  **watch** name has fallen a lot — drawdown-from-20d-high ladder (−5%→1u, −8%→2u, −12%→3u, −18%→4u)
+  plus a deep **RSI(2)<10 → +1u** kicker — laddering bigger the harder it falls (`unit_dollars` $3.50).
+  **Trims** the opportunistic tranche on the bounce (RSI2>70 or close>5DMA); the core is never trimmed.
+  **Melt-ice-cube backstop:** if nothing tanks for `backstop_days` (15), deploy `backstop_dollars`
+  into the core so cash never rots. Long-only, dollar-sized, fractional, `max_names` (4) concentration cap.
+- Wired into `cloud_decide.py`: `decide_spy` **removed** (SPY weekly-DCA retired); `tank.decide` runs
+  in its place, sized off `allocation.tank_budget`. `to_broker_orders` emits tank buys (dollar) / trims
+  (share qty, **capped to REAL shares**). Tank ledger reconciled vs real shares each run + persisted.
+### Changed — allocation → 40/35/25 (TANK / pairs / swing)
+- `_bot_allocation`: `spy_accumulate_pct` retired → `tank_pct: 40`, `pairs_pct: 35`, `swing_pct: 25`.
+  `allocation.py` returns `tank_budget` (folds a legacy `spy_accumulate_pct` into tank for back-compat).
+- **Why:** the SPY weekly-DCA added ~zero value vs a plain recurring buy (10y backtest: dip-timing
+  lagged DCA), and "buy every Monday" is not an active-trader strategy. That 40% now trades actively.
+### Verified
+- Full-brain local dry-run (real snapshot: $224 value / $114 cash / held SPY,MA,QQQ,C) → 4 sane tank
+  buys (COIN 3u, AVGO 3u @ RSI2=5, META/GOOGL 2u; AMZN skipped at max_names), $35, within the $56 cap.
+### TODO before full activation
+- Add the tank `watch` list to the LIVE routines' `get_equity_historicals` fetch (they pull
+  SPY+QQQ+pair tickers only today) so the whole watchlist gets prices. Until then tank is active on
+  **SPY/QQQ only**. Per Golden Rule #2, run the **DRY-RUN routine** once to confirm in-cloud before LIVE.
+
 ## 2026-07-16 — Pairs: base + z-ladder ROTATION (long-only pairs are now a real pair trade)
 ### Changed — long_only pairs no longer exit to cash; they rotate + ladder
 - **Root cause of the "sold IBIT, never bought" report:** `long_only` pairs ran an
