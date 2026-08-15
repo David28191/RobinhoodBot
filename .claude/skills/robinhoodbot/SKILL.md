@@ -1,6 +1,6 @@
 ---
 name: robinhoodbot
-description: Operating manual + control surface for the RobinhoodBot autonomous trading system (SPY accumulator + stat-arb pairs + QQQ swing) running on the Robinhood Agentic MCP via scheduled cloud routines. Use when adding/removing pairs, adjusting sizing or allocation, running backtests, managing the cloud routines (enable/disable/run), reading the scout or trade-review reports, or diagnosing the bot. This is the manual for HOW to change the bot safely — the trading itself runs in the cloud, not in this skill.
+description: Operating manual + control surface for the RobinhoodBot autonomous trading system (TANK accumulator + stat-arb pairs + QQQ swing) running on the Robinhood Agentic MCP via scheduled cloud routines. Use when adding/removing pairs, adjusting sizing or allocation, running backtests, managing the cloud routines (enable/disable/run), reading the scout or trade-review reports, or diagnosing the bot. This is the manual for HOW to change the bot safely — the trading itself runs in the cloud, not in this skill.
 ---
 
 # RobinhoodBot — operating manual
@@ -30,20 +30,24 @@ orders — your PC can be off. This skill is the manual for operating and improv
 Bankroll = **real account value** (so weekly deposits + gains grow every sleeve). Split in
 `spy_accumulate.json` → `_bot_allocation` (read via `allocation.py`):
 
-| Sleeve | % | ~$ at ~$158 | What it does |
+| Sleeve | % | ~$ at ~$224 | What it does |
 |---|---|---|---|
-| SPY accumulator | 40% | ~$63 | buy-and-hold core + opportunistic dips (rolling-anchor signal) |
-| Pairs | 40% | ~$63 | "pair" stat-arb, but LONG-ONLY = a directional long of the cheap leg |
-| QQQ swing | 20% | ~$32 | base long + trade around it (always net long) |
+| TANK accumulator | 40% | ~$90 | hold a core (SPY/QQQ) + actively buy names that TANK (drawdown/RSI ladder), trim the bounce, melt-ice-cube backstop |
+| Pairs | 35% | ~$78 | "pair" stat-arb, but LONG-ONLY = a directional long of the cheap leg |
+| QQQ swing | 25% | ~$56 | base long + trade around it (always net long) |
 _Sizing tracks the REAL account value each run (allocation.py off `get_portfolio`), so these $ grow with deposits/gains._
 
-**1. SPY accumulator** (`spy_accumulate.json`, logic in `live_spy.py`):
-- Weekly **base buy $5** → protected core, never sold
-- **Dip ladder**: −1.5σ→$15, −2.5σ→$25, −3.5σ→$35 (5-day cooldown)
-- **Trim 5%** of the *dip-sleeve only* at +2.5σ (core untouched)
-- **Signal = `rolling`** (10-day rolling-mean anchor, `rolling_ma_days=10`) since 2026-07-09 — z =
-  `ln(price / 10-day mean) / rolling_std`, continuous so it catches multi-week dips. (Was `weekly`,
-  which reset each Monday and fired only ~1 dip buy in 2 years.) Options: `weekly` / `rolling` / `trend`.
+**1. TANK accumulator** (`tank.json`, logic in `tank.py`) — RETIRED the SPY weekly-DCA on 2026-08-15
+(dip-timing lagged plain DCA in a 10y backtest, and "buy every Monday" isn't an active-trader strategy):
+- **Core** (`core`: SPY, QQQ) — held, never sold.
+- **Buy the tank**: scan `watch` (index + liquid volatile names). Drawdown from the 20-day high → target
+  UNITS (−5%→1u, −8%→2u, −12%→3u, −18%→4u); **RSI(2)<10 adds +1u**. Deeper fall = bigger buy. `unit_dollars` $3.50.
+- **Sell the bounce**: TRIM the opportunistic tranche when it bounces (RSI2>`trim_rsi` 70, or close>5-DMA);
+  the core is never trimmed. Trim qty is capped to REAL shares in `cloud_decide`.
+- **Melt-ice-cube backstop**: if nothing tanks for `backstop_days` (15), deploy `backstop_dollars` into the
+  core so cash never rots (buy the melt-up).
+- Long-only, dollar-sized, fractional, `max_names` (4) concentration cap. Ledger
+  `{positions:{sym:{shares,entry_px,units,...}}, last_buy_date}`, reconciled vs real shares each run.
 
 **2. Pairs** (`pairs.json`, logic in `live.py` / `pairbot.py`):
 - Traded pairs: C/GS, JPM/WFC, XOM/CVX, V/MA, BSOL/IBIT
@@ -77,11 +81,12 @@ _Sizing tracks the REAL account value each run (allocation.py off `get_portfolio
 | File | Role |
 |---|---|
 | `cloud_decide.py` | **The brain.** Reads MCP prices + state, runs all 3 strategies, emits `data/intended_orders.json` + `data/updated_state.json`. Data-agnostic (no yfinance) so it runs in the cloud. |
-| `live.py` / `live_spy.py` | Pure `decide()` for pairs / accumulator (reused by the brain; also paper-run locally). |
+| `live.py` | Pure `decide()` for pairs (reused by the brain; also paper-run locally). |
+| `tank.py` / `tank.json` | **TANK accumulator** — pure `decide()` + config. Buy tanks / trim bounces / melt-ice-cube backstop. Local dry-run via `python tank.py`. |
 | `spy_wtd.py` | Swing engine: `weekly_frame`; v2 base+ladder = `swing_ladder_decide` / `apply_swing_ladder` / `backtest_swing_ladder` / `_ladder_target`; plus the old SPY round-trip `backtest` / `swing_live_decide`. |
-| `spy_accumulate.py` | Accumulator engine + signals + `_bot_allocation`. |
+| `spy_accumulate.py` | Legacy SPY-DCA engine (RETIRED as a live sleeve 2026-08-15); still holds `_bot_allocation`. `live_spy.py` likewise legacy. |
 | `pairbot.py` | Pair engine: `fetch_prices` (yfinance, **local only**), `compute_spread`, `backtest_pair`. |
-| `allocation.py` | Single source of truth for the 50/40/10 split; `load_allocation(bankroll)` sizes off real account value. |
+| `allocation.py` | Single source of truth for the tank/pairs/swing split; `load_allocation(bankroll)` sizes off real account value → `tank_budget` / `pairs_budget` / `swing_budget`. |
 | `find_pairs.py` | Discovery universe (28 sectors / 156 tickers) + cointegration math (ADF, half-life). |
 | `scout_pairs.py` | Weekly pair-discovery report (cloud-runnable); ADD-candidates, full ACTIONABLE-NOW detail (which leg to BUY, coint/ADF, corr, half-life, win%), and per-pair **sector macro trend** (3mo + vs-200d, flags long-into-a-falling-sector). |
 | `review_trades.py` | Hindsight scorecard of real fills (return, MAE/MFE, entry timing, vs-SPY). |
@@ -115,7 +120,7 @@ Robinhood agent in the Robinhood app, OR ask Claude to disable it.
 1. Cloud routine clones the repo (read-only) and installs deps.
 2. Loads prior **state** from Google Drive file `robinhood_live_state.json`.
 3. Pulls **prices** via Robinhood `get_equity_historicals` (NOT yfinance — sandbox blocks Yahoo)
-   for SPY + QQQ + pair tickers → `data/mcp_prices.json`.
+   for SPY + QQQ + pair tickers + every `tank.json` `watch` symbol → `data/mcp_prices.json`.
 4. Reads live **cash + account_value + positions** via `get_portfolio` / `get_equity_positions`.
 5. Runs `python cloud_decide.py` → `data/intended_orders.json` (+ `updated_state.json`, and
    **appends one line to `data/bot_journal.jsonl`** — the durable run history).
@@ -135,8 +140,8 @@ _Still optional/nice-to-have:_ append a second line per order with the CONFIRMED
 id/fill so the journal records what actually filled, not just intent (currently intent only).
 
 **Caps enforced:** `cloud_decide` drops buys exceeding `min(cash, 25%-of-account)`; the live
-routine adds a $150 absolute backstop and a **SPY base-buy guard** (checks order history so a
-stale state can't double-buy).
+routine adds a $150 absolute backstop. (The old **SPY base-buy guard** is now a vestigial no-op —
+the weekly-DCA sleeve it protected was retired 2026-08-15; tank orders never carry that reason.)
 
 ---
 
@@ -148,13 +153,13 @@ stale state can't double-buy).
 to a `find_pairs.UNIVERSE` group if not already there so the scout keeps watching them.)
 
 **Adjust a sleeve size or %:** edit `spy_accumulate.json` → `_bot_allocation`
-(`spy_accumulate_pct` / `pairs_pct` / `swing_pct`) and/or the per-strategy dollar knobs
-(`base_buy_dollars`, `dip_ladder`, `capital_per_leg`, swing `capital`), then `git push`.
-Bankroll auto-tracks real account value, so deposits grow everything — don't hardcode totals.
+(`tank_pct` / `pairs_pct` / `swing_pct`) and/or the per-strategy dollar knobs (tank `unit_dollars` /
+`dd_ladder` / `max_names` / `backstop_dollars` in `tank.json`, pairs `capital_per_leg`, swing `capital`),
+then `git push`. Bankroll auto-tracks real account value, so deposits grow everything — don't hardcode totals.
 
 **Backtest before changing anything live:**
 - Pairs: `python find_pairs.py` (discovery) or `pairbot.backtest_pair`.
-- Accumulator: `python spy_accumulate.py` / `optimize_accumulate.py`.
+- Tank: `python tank.py` (local dry-run readout of what it would buy/trim today).
 - Swing: `python spy_wtd.py` (compares variants; tune in `swing.json`/`spy.json`).
 
 **Enable / disable / run a routine:** `RemoteTrigger {action:"update", trigger_id, body:{enabled:true|false}}`
@@ -180,6 +185,7 @@ vs-SPY). Improvement = (signal from reports) + (this skill's rules for changing 
 
 ## Status / open items (update as we go)
 - **LIVE since 2026-06-28** — first real autonomous run Mon 2026-06-29 9:40am ET. Drive read+write confirmed working; the dashboard refreshes daily.
+- **TANK sleeve REPLACED the SPY weekly-DCA (2026-08-15)** — allocation → **tank 40 / pairs 35 / swing 25**. `cloud_decide` runs `tank.decide` (SPY-DCA `decide_spy` removed). All three routines (LIVE AM, LIVE PM, DRY-RUN) updated to fetch the tank `watch` list + persist the tank ledger. DRY-RUN validated in-cloud before the first live tank run. Hardening TODO: tank ledger is loosely reconciled (drops positions with ~0 real shares; a cash_guard-dropped buy self-heals next run) — consider deriving units from real shares (full RH-as-truth).
 - Email delivery from routines unverified — reports go via **push + Google Drive**; connect a Gmail connector for real inbox email.
 - **Pair expansion paused this week** — all current ADD-candidates are energy (long-into-a-falling-sector); waiting for a cointegrated candidate in a sector OK to be long. Widen scope by editing `find_pairs.UNIVERSE`.
 - Swing sleeve = **20% (~$32)** (raised from 10% on 2026-07-09, funded from accumulator 50→40%); base+ladder, rolling anchor, grows with the account.
