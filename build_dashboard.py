@@ -113,7 +113,7 @@ def build():
           <div class="alloc-top"><b>{name}</b><span>{pct:.0f}% &middot; {money(dollars)} budget &middot; {money(used)} used</span></div>
           <div class="track"><div class="fill" style="width:{min(usedpct,100):.0f}%"></div></div>
         </div>"""
-    alloc_html = (bar("SPY Accumulator", al["spy_pct"], al["spy_budget"], deployed["Accumulator"])
+    alloc_html = (bar("Tank / SPY", al["tank_pct"], al["tank_budget"], deployed["Accumulator"])
                   + bar("Pairs", al["pairs_pct"], al["pairs_budget"], deployed["Pairs"])
                   + bar("QQQ Swing", al["swing_pct"], al["swing_budget"], deployed["Swing"]))
 
@@ -225,7 +225,7 @@ def build():
       <h2>SPY Accumulator <span class="muted">— buy &amp; hold core + buy dips</span></h2>
       <p>Weekly base buy <b>${d.get('base_buy_dollars')}</b> (never sold) &middot; dip ladder: {ladder}
          &middot; trim {int(d.get('trim_pct',0)*100)}% of the dip-sleeve at +{d.get('sell_z')}σ.</p>
-      <p class="muted">Budget {money(al['spy_budget'])} ({al['spy_pct']:.0f}%) &middot; deployed {money(deployed['Accumulator'])}</p>
+      <p class="muted">Budget {money(al['tank_budget'])} ({al['tank_pct']:.0f}%) &middot; deployed {money(deployed['Accumulator'])}</p>
       {pos_table('Accumulator')}"""
 
     plist = ", ".join(f"{p['a']}/{p['b']}" for p in pairs_cfg.get("pairs", []))
