@@ -35,8 +35,7 @@ def _metrics(cfg, close, sym):
     hi = float(px.tail(cfg["hi_lookback"]).max())
     dd = p/hi - 1
     r2 = float(_rsi(px, cfg["rsi_len"]).iloc[-1])
-    ma = float(px.tail(cfg["ma_exit"]).mean())
-    return dict(price=p, dd=dd, rsi2=r2, ma=ma)
+    return dict(price=p, dd=dd, rsi2=r2)
 
 def decide(cfg, close, state, budget, today):
     """Pure. Returns (orders, notes, new_ledger). orders: internal dicts
@@ -58,36 +57,60 @@ def decide(cfg, close, state, budget, today):
     open_names = len([s for s, p in positions.items() if p.get("units", 0) > 0])
     tanked = False
 
+    cools = led.setdefault("cooldowns", {})            # post-exit re-entry cooldown per symbol
     for sym, m in scored:
         held = positions.get(sym)
         held_u = int(held["units"]) if held else 0
-        bounced = (m["rsi2"] > cfg["trim_rsi"]) or (m["price"] > m["ma"])
-        # cooldown on an existing name
         ready = True
         if held and held.get("last_action_date"):
             ready = (today - dt.date.fromisoformat(held["last_action_date"])).days >= cfg["cooldown_days"]
 
-        # SELL the bounce — trim the whole opportunistic tranche (core is separate, never here)
-        if held and held_u > 0 and bounced and ready:
-            orders.append({"source": "tank", "side": "SELL", "symbol": sym,
-                           "shares": round(float(held["shares"]), SHARE_DP),
-                           "reason": f"bounce trim (RSI2={m['rsi2']:.0f}, >{cfg['ma_exit']}DMA) after {m['dd']*100:+.1f}% tank"})
-            deployed -= held_u * unit
-            positions.pop(sym, None); open_names -= 1
-            notes.append(f"{sym}: bounced -> TRIM"); continue
+        # EXIT — ACCUMULATE the tank, then trim ONLY on a real move (not the first up-wiggle):
+        #   +profit_target vs avg cost · a genuine overbought RIP (RSI2 > trim_rsi) · a soft timeout
+        #   (dead money) · or a catastrophe stop. Uses AVERAGE cost (basis/shares); legacy positions
+        #   with no stored basis fall back to entry_px. Sells the whole tranche (core is never here).
+        if held and held_u > 0 and ready:
+            sh_ = float(held.get("shares", 0.0)) or 0.0
+            basis = float(held.get("basis") or 0.0)
+            if basis <= 0 and sh_ > 0: basis = float(held.get("entry_px", m["price"])) * sh_
+            avg = basis / sh_ if sh_ > 0 else m["price"]
+            gain = (m["price"] / avg - 1) if avg > 0 else 0.0
+            held_days = (today - dt.date.fromisoformat(held.get("entry_date", today.isoformat()))).days
+            why = None
+            if gain >= cfg["profit_target"]:       why = f"+{gain*100:.0f}% target"
+            elif m["rsi2"] > cfg["trim_rsi"]:       why = f"RSI2={m['rsi2']:.0f} rip"
+            elif gain <= cfg["stop_pct"]:           why = f"{gain*100:.0f}% stop"
+            elif held_days >= cfg["timeout_days"]:  why = f"{held_days}d timeout"
+            if why:
+                orders.append({"source": "tank", "side": "SELL", "symbol": sym,
+                               "shares": round(sh_, SHARE_DP),
+                               "reason": f"trim — {why} (avg ${avg:.2f} -> ${m['price']:.2f})"})
+                deployed -= held_u * unit
+                positions.pop(sym, None); open_names -= 1
+                cools[sym] = today.isoformat()
+                notes.append(f"{sym}: TRIM ({why})"); continue
 
         # BUY the tank — ladder deeper as it falls
         target_u = _units(m["dd"], m["rsi2"], cfg)
-        if target_u > held_u and ready and not bounced:
-            if held_u == 0 and open_names >= cfg["max_names"]:
-                notes.append(f"{sym}: tank {target_u}u but at max_names {cfg['max_names']} — skip"); continue
+        if target_u > held_u and ready:
+            if held_u == 0:
+                # post-exit re-entry cooldown — don't immediately re-buy a name we just exited (anti-whipsaw)
+                cd = cools.get(sym)
+                if cd and (today - dt.date.fromisoformat(cd)).days < int(cfg.get("reentry_cooldown_days", 7)):
+                    notes.append(f"{sym}: tank but in post-exit cooldown — skip"); continue
+                if open_names >= cfg["max_names"]:
+                    notes.append(f"{sym}: tank {target_u}u but at max_names {cfg['max_names']} — skip"); continue
             add_u = target_u - held_u
             add_dollars = min(add_u * unit, max(0.0, budget - deployed))
             if add_dollars >= 1:
                 sh = round((add_dollars - add_dollars*cost) / m["price"], SHARE_DP)
-                prev_sh = float(held["shares"]) if held else 0.0
-                positions[sym] = {"shares": round(prev_sh + sh, SHARE_DP), "entry_px": m["price"],
-                                  "units": target_u, "entry_date": (held or {}).get("entry_date", today.isoformat()),
+                prev = held or {}
+                prev_sh = float(prev.get("shares", 0.0)); prev_basis = float(prev.get("basis", 0.0))
+                if prev_basis <= 0 and prev_sh > 0: prev_basis = float(prev.get("entry_px", m["price"])) * prev_sh
+                positions[sym] = {"shares": round(prev_sh + sh, SHARE_DP),
+                                  "basis": round(prev_basis + add_dollars, 2),
+                                  "entry_px": m["price"], "units": target_u,
+                                  "entry_date": prev.get("entry_date", today.isoformat()),
                                   "last_action_date": today.isoformat()}
                 orders.append({"source": "tank", "side": "BUY", "symbol": sym,
                                "dollars": round(add_dollars, 2),

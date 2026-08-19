@@ -3,6 +3,23 @@
 Notable changes to the autonomous trading bot. Newest first.
 (Account: Agentic cash `••••596618249`, ~$120, +$10/week deposits.)
 
+## 2026-08-18 — TANK exit rework: ACCUMULATE, trim only on a real move (stop churning pennies)
+### Changed — sell-the-first-bounce → hold-and-take-real-gains
+- **Problem:** the old exit trimmed on `RSI2>70 OR close>5-day-MA` — the 5-day reclaim is a very low bar,
+  so it flipped positions ~4 days after buying for a ~+1.4% median (~$0.10 on a $10 position) and threw off
+  hundreds of round-trips — max churn / max T+1-settlement drag / min dollars on a tiny cash account. And a
+  flat stabilization tripped it near breakeven (not a real "bounce").
+- **New exit (`tank.py` + `tank.json`):** BUY the tanks and **accumulate**; trim a tranche only on a real
+  move — **+`profit_target` (20%) vs average cost**, a genuine overbought **RSI2 > `trim_rsi` (90)** rip, a
+  soft **`timeout_days` (60)** on dead money, or a catastrophe **`stop_pct` (−25%)**. Now tracks per-tranche
+  **`basis`** (avg cost); legacy positions with no stored basis fall back to `entry_px`.
+- **Anti-whipsaw:** a **`reentry_cooldown_days` (7)** post-exit cooldown so a stop can't flip straight back in.
+- **Backtest (18 liquid names, 2y, per-trade gross):** current 894 trades / +0.97% avg / $0.10 per $10 pos →
+  reworked ≈150–400 trades / +3–9% avg / $0.30–0.95 per trade, ~same win rate. ~6× fewer trades, ~10× the
+  gain each — and true to the "accumulate the tank" idea. (Absolute $ still small until the account grows.)
+- Dropped the now-unused `ma_exit`/5-day-MA. Entry ladder, `max_names`, core + melt-ice-cube backstop unchanged.
+- Verified: unit tests fire target/stop/timeout correctly and HOLD a small loser; full local dry-run clean.
+
 ## 2026-08-15 — TANK accumulator sleeve REPLACES the retired SPY weekly-DCA
 ### Added — TANK sleeve (active: buy the tank, sell the bounce, melt-ice-cube backstop)
 - New `tank.py` + `tank.json`. Holds a **core** (SPY/QQQ, never sold); strikes with dry powder when a
