@@ -22,6 +22,7 @@
   "backstop_days": 15,
   "backstop_dollars": 10,
   "cost_bps": 2,
+  "intraday_recovery_pct": 0.03,
 
   "_param_help": {
     "unit_dollars": "$ per ladder 'unit'. A 4-unit deep tank buys 4x this. Scale with the account.",
@@ -35,6 +36,7 @@
     "max_names": "max simultaneous opportunistic tank positions (concentration cap).",
     "cooldown_days": "min days between adds/trims on one name.",
     "backstop_days": "if NO tank buy fires for this many days, deploy backstop_dollars into core[0] (melt-ice-cube).",
-    "backstop_dollars": "$ deployed into the core when the backstop fires."
+    "backstop_dollars": "$ deployed into the core when the backstop fires.",
+    "intraday_recovery_pct": "skip a tank BUY if the live spot price is already this far above the historical close that generated the signal (e.g. 0.03 = +3%). Guards against buying into a gap-up rip on a stale prior-close signal."
   }
 }

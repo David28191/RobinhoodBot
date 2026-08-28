@@ -50,6 +50,9 @@ STATE_FILE = os.path.join(DATA, "live_state.json")
 OUT_FILE = os.path.join(DATA, "intended_orders.json")
 JOURNAL_FILE = os.path.join(DATA, "bot_journal.jsonl")   # append-only run history
 SWING_CFG_FILE = os.path.join(HERE, "swing.json")
+# Optional: written by the routine before cloud_decide runs (get_equity_quotes midpoints).
+# If missing, the intraday-recovery guard is silently skipped.
+SPOT_FILE = os.path.join(DATA, "spot_quotes.json")
 
 
 def append_journal(result):
@@ -328,6 +331,11 @@ def main():
     with open(SWING_CFG_FILE) as f:
         cfg_swing = json.load(f)
 
+    spot_quotes = {}
+    if os.path.exists(SPOT_FILE):
+        with open(SPOT_FILE) as f:
+            spot_quotes = json.load(f)
+
     # Bankroll = REAL account value when provided (so weekly deposits + gains grow
     # every sleeve AND the per-run cap automatically); else the static config.
     bankroll = float(state.get("account_value") or allocation.load_allocation()["total"])
@@ -361,7 +369,7 @@ def main():
         if float(_shares.get(_sym) or 0.0) <= 1e-6:
             _tank_pos.pop(_sym, None)
             tank_recon.append(f"tank {_sym}: ledger held but account has none -> reset")
-    tank_orders, tank_notes, tank_led = tank.decide(cfg_tank, close, state, al["tank_budget"], today)
+    tank_orders, tank_notes, tank_led = tank.decide(cfg_tank, close, state, al["tank_budget"], today, spot=spot_quotes)
     tank_notes = tank_recon + tank_notes
 
     swing_orders, swing_price, swing_notes = decide_swing(cfg_swing, close, state, al)

@@ -37,9 +37,12 @@ def _metrics(cfg, close, sym):
     r2 = float(_rsi(px, cfg["rsi_len"]).iloc[-1])
     return dict(price=p, dd=dd, rsi2=r2)
 
-def decide(cfg, close, state, budget, today):
+def decide(cfg, close, state, budget, today, spot=None):
     """Pure. Returns (orders, notes, new_ledger). orders: internal dicts
-    {source:'tank', side:'BUY'|'SELL', symbol, dollars|shares, reason}."""
+    {source:'tank', side:'BUY'|'SELL', symbol, dollars|shares, reason}.
+    spot: optional {sym: live_price} from get_equity_quotes; if provided, BUYs
+    are skipped when the live price has already recovered > intraday_recovery_pct
+    above the historical close that generated the signal."""
     cost = cfg.get("cost_bps", 2) / 1e4
     unit = float(cfg["unit_dollars"])
     led = json.loads(json.dumps(state.get("tank", {"positions": {}, "last_buy_date": None})))
@@ -100,6 +103,16 @@ def decide(cfg, close, state, budget, today):
                     notes.append(f"{sym}: tank but in post-exit cooldown — skip"); continue
                 if open_names >= cfg["max_names"]:
                     notes.append(f"{sym}: tank {target_u}u but at max_names {cfg['max_names']} — skip"); continue
+            # intraday recovery guard: skip if live price has already bounced too far
+            # above the historical close that generated the signal (stale-signal guard)
+            if spot:
+                live_px = float(spot.get(sym) or 0.0)
+                if live_px > 0:
+                    recovery = live_px / m["price"] - 1
+                    thr = float(cfg.get("intraday_recovery_pct", 0.03))
+                    if recovery > thr:
+                        notes.append(f"{sym}: tank signal but +{recovery*100:.1f}% above signal close (>{thr*100:.0f}% intraday recovery) — skip")
+                        continue
             add_u = target_u - held_u
             add_dollars = min(add_u * unit, max(0.0, budget - deployed))
             if add_dollars >= 1:
