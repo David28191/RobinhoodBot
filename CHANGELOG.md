@@ -33,9 +33,18 @@ Notable changes to the autonomous trading bot. Newest first.
 - **`Damian - market scan`** `trig_01Ds7CYFws1XKHeJU4m1ZXXf`, Mon-Fri 12:20 UTC (7:20am CT).
   **Created DISABLED** per Golden Rule #2. Prompt is one line pointing at
   `docs/damian_routine.md`, so behaviour changes land by editing that file + `git push`.
-  Google-Drive attached; **the Robinhood connector must be added in the web UI** - this Claude Code
-  session cannot attach it (a local server shadows the claude.ai connector).
+  Google-Drive + Robinhood attached. The `schedule` skill says this session cannot attach the
+  Robinhood connector (a local server shadows it, so it is not *listed*) - but the details can be
+  **copied from an existing routine**: `RemoteTrigger get trig_01Y4...` -> `mcp_connections`.
+  **`allowed_tools` must also list `mcp__Robinhood-trading` / `mcp__Google-Drive` /
+  `PushNotification`** - attaching the connector alone leaves the tools uncallable (Damian's first
+  run failed exactly this way and stopped loudly, as specified, writing nothing).
+  **Damian's connector is restricted by `permitted_tools` to 10 read-only tools** (no order tool is
+  reachable), so the never-trade rule is enforced by the platform, not just by the prompt.
 ### Verified
+- **In-cloud dry run 2026-09-07** (`cse_013dr5zakVaJzDhmZBmdBRKz`): all three scans ran live
+  (398 / 212 / 218 matches, matching local), ~95k-char payloads auto-saved to files and processed
+  with `jq` without entering context.
 - Local end-to-end: 466 discovered -> 440 scored, MU top at 91.8 (fwd P/E 6.6 vs trailing 23.0 -
   the memory-cycle earnings ramp, exactly the compression the valuation pillar is built to catch).
 - Stage-2 path validated on a fixture: sector resolves, earnings pillar lights up, confluence

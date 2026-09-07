@@ -107,7 +107,7 @@ _Sizing tracks the REAL account value each run (allocation.py off `get_portfolio
 | Pair Scout | `trig_01RF4emscfykPKgba1Adcjaj` | Mon 8:05am ET | Pair candidates + sector trend → push + Drive (`pair_scout_latest.txt`). |
 | Trade Review | `trig_01T669GazXXPoWNijRGeowGw` | Fri 5:08pm ET | Hindsight scorecard → push + Drive (`trade_review_latest.txt`). |
 | Dashboard Refresh | `trig_019hbuAg3ij4oPZAFh4xbt81` | Daily 6:05pm ET | Rebuilds dashboard (account + recs) → Drive (`bot_dashboard_latest.html`); persists `scope_prev.json` for day-over-day diffs. |
-| **Damian - market scan** | `trig_01Ds7CYFws1XKHeJU4m1ZXXf` | Mon-Fri 7:20am CT | **DISABLED** - research-only market-wide stock scan (fwd P/E + earnings + macro). Places NO orders. Needs the Robinhood connector added in the web UI. |
+| **Damian - market scan** | `trig_01Ds7CYFws1XKHeJU4m1ZXXf` | Mon-Fri 7:20am CT | **DISABLED** - research-only market-wide stock scan (fwd P/E + earnings + macro). Places NO orders - its Robinhood connector is locked by `permitted_tools` to 10 READ-ONLY tools, so no order tool is even reachable. |
 | Cloud Brain (DRY RUN) | `trig_01D42gNNUFWG3Ykw1CH5qafs` | Mon–Fri 9:40am ET | **Disabled** — rehearsal (decide + notify, no trades); re-enable to test before risky changes. |
 
 All clone the repo, `pip install pandas numpy yfinance plotly`, pull data from the
