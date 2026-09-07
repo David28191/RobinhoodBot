@@ -63,8 +63,16 @@ trend agreeing. Those rank first.
 python damian.py
 ```
 
-This scores everything on scan data alone and writes `data/damian_report.md`. Take the
-**top 20 by score**, preferring higher confluence. That is your shortlist.
+This scores everything on scan data alone and writes `data/damian_report.md` **and
+`data/damian_shortlist.json`**. Use that shortlist file — it is the ranked stage-1 output,
+already sector-diversified. Take its `symbols` (24 by default); trim to the top 20 if you
+want to save calls.
+
+> **Sector cap.** The ranked lists allow at most `output.max_per_sector` (3) names per
+> sector. A forward-P/E screen concentrates hard — cyclicals go cheap together, so the raw
+> ranking can return one trade six times and look diversified. If the report shows a
+> "Sector cap applied" note, mention it in your write-up. Names with sector `Unknown` are
+> never capped (that just means fundamentals were not fetched yet).
 
 ## Step 3 — Deep-dive the shortlist
 

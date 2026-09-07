@@ -596,18 +596,24 @@ def prescreen(cfg, inputs, universe):
     rows, skipped = build_rows(cfg, inputs, universe)
     _, med_trend = sector_aggregates(rows)
 
-    # Sector-median TRAILING P/E (stage 2 recomputes this on forward P/E).
+    # Stage 1 usually runs BEFORE fundamentals are fetched, so trailing P/E is
+    # not available yet - the scanner's forward P/E is. Prefer whichever exists,
+    # forward first, or this pass skips the whole universe.
+    def pe_of(r):
+        return r.get("fwd_pe") or r.get("trailing_pe")
+
     by_sector = {}
     for r in rows:
-        if r.get("trailing_pe") and r["trailing_pe"] > 0:
-            by_sector.setdefault(r["sector"], []).append(r["trailing_pe"])
+        v = pe_of(r)
+        if v and v > 0:
+            by_sector.setdefault(r["sector"], []).append(v)
     med_trail = {s: statistics.median(v) for s, v in by_sector.items() if len(v) >= 2}
 
     out = []
     for r in rows:
-        tpe = r.get("trailing_pe")
+        tpe = pe_of(r)
         if tpe is None or tpe <= 0 or tpe > pc["trailing_pe_cap"]:
-            skipped.append((r["symbol"], "trailing P/E missing or above cap"))
+            skipped.append((r["symbol"], "no usable P/E, or above cap"))
             continue
 
         ideal = pc["ideal_trailing_pe"]
@@ -659,25 +665,68 @@ def write_shortlist(cfg, ranked, skipped, base=None):
 
 # ---------------------------------------------------------------- output
 
+def apply_sector_cap(scored, max_per_sector):
+    """Re-order so no sector fills the top of the list.
+
+    A forward-P/E screen concentrates hard: deep cyclicals (memory, energy,
+    shipping) go cheap together, so the raw ranking can return one trade
+    several times over and read as diversified. Names past the cap keep their
+    score but drop below the uncapped ones. Sector "Unknown" is never capped -
+    it means fundamentals have not been fetched yet (stage-1 pass), not that
+    the names share a business.
+    """
+    if not max_per_sector or max_per_sector < 1:
+        return list(scored), []
+
+    kept, overflow, seen = [], [], {}
+    for r in scored:
+        sector = r.get("sector") or "Unknown"
+        if sector == "Unknown":
+            kept.append(r)
+            continue
+        seen[sector] = seen.get(sector, 0) + 1
+        if seen[sector] <= max_per_sector:
+            kept.append(r)
+        else:
+            r = dict(r)
+            r.setdefault("flags", []).append(
+                "below sector cap - %d higher-scoring %s name(s) already listed"
+                % (max_per_sector, sector))
+            overflow.append(r)
+    return kept + overflow, overflow
+
+
 def _fmt(v, spec="%.1f", dash="-"):
     return dash if v is None else spec % v
 
 
 def render_report(cfg, scored, skipped, asof):
     o = cfg["output"]
-    top = scored[:o["top_n"]]
-    watch = scored[o["top_n"]:o["top_n"] + o["watch_n"]]
+    capped, demoted = apply_sector_cap(scored, o.get("max_per_sector"))
+    top = capped[:o["top_n"]]
+    watch = capped[o["top_n"]:o["top_n"] + o["watch_n"]]
+
+    n_native = sum(1 for r in scored if r.get("fwd_pe_source") == "scanner")
 
     L = []
     L.append("# Damian - stock scan %s" % asof)
     L.append("")
     L.append("Research only. No orders are placed by this scan.")
     L.append("")
-    L.append("Scored %d of %d universe names on valuation (forward P/E), earnings quality, "
-             "and macro/trend. Forward P/E is constructed as price / (last 3 reported quarters "
-             "+ next quarter's consensus estimate) - Robinhood publishes no forward-P/E field."
-             % (len(scored), len(scored) + len(skipped)))
+    L.append("Scored %d of %d names on valuation (forward P/E), earnings quality, and "
+             "macro/trend. Forward P/E is Robinhood's own field for %d of them; for the rest it "
+             "is constructed as price / (last 3 reported quarters + next quarter's estimate)."
+             % (len(scored), len(scored) + len(skipped), n_native))
     L.append("")
+
+    if demoted:
+        L.append("> **Sector cap applied.** At most %d names per sector appear in the ranked "
+                 "lists, so one crowded trade cannot fill the report. %d name(s) were pushed "
+                 "down despite scoring well: %s. A screen that returns six versions of the same "
+                 "bet has found one idea, not six." % (
+                     o["max_per_sector"], len(demoted),
+                     ", ".join("%s (%s)" % (r["symbol"], r["sector"]) for r in demoted[:8])))
+        L.append("")
 
     L.append("## Top candidates")
     L.append("")
@@ -767,12 +816,15 @@ def write_outputs(cfg, scored, skipped, asof, base=None):
         f.write(render_report(cfg, scored, skipped, asof))
     paths["report"] = report_path
 
+    # Same order the report shows, so picks.json and the report never disagree.
+    capped, _ = apply_sector_cap(scored, o.get("max_per_sector"))
+
     keep = ("symbol", "name", "confluence", "scans", "peg", "roe", "fwd_pe_source", "score", "score_valuation", "score_earnings", "score_macro",
             "price", "sector", "industry", "fwd_pe", "fwd_eps", "fwd_eps_basis",
             "trailing_pe", "sector_median_fwd_pe", "sector_trend_3mo", "market_cap",
             "next_earnings_date", "days_to_earnings", "rel_strength", "range_position",
             "notes", "flags")
-    picks = [{k: r.get(k) for k in keep} for r in scored[:o["top_n"] + o["watch_n"]]]
+    picks = [{k: r.get(k) for k in keep} for r in capped[:o["top_n"] + o["watch_n"]]]
     picks_path = os.path.join(root, o["picks_path"])
     with open(picks_path, "w", encoding="utf-8") as f:
         json.dump({"asof": asof, "generated": datetime.now().isoformat(timespec="seconds"),
@@ -787,7 +839,8 @@ def write_outputs(cfg, scored, skipped, asof, base=None):
             "asof": asof,
             "scored": len(scored),
             "top": [{"symbol": r["symbol"], "score": round(r["score"], 2),
-                     "fwd_pe": r.get("fwd_pe")} for r in scored[:o["top_n"]]],
+                     "fwd_pe": r.get("fwd_pe"), "sector": r.get("sector")}
+                    for r in capped[:o["top_n"]]],
         }) + "\n")
     paths["journal"] = journal_path
 
@@ -798,6 +851,13 @@ def run(cfg=None, data_dir=None, base=None):
     cfg = cfg or load_config()
     inputs = load_inputs(data_dir)
     universe = build_universe(cfg, inputs)
+
+    # Stage 1: rank on cheap data and publish the shortlist the routine uses to
+    # decide which names are worth the per-symbol earnings calls in stage 2.
+    if not inputs.get("fundamentals"):
+        ranked, pre_skipped = prescreen(cfg, inputs, universe)
+        write_shortlist(cfg, ranked, pre_skipped, base=base)
+
     rows, skipped = build_rows(cfg, inputs, universe)
     scored = score_rows(cfg, rows)
     asof = date.today().isoformat()
