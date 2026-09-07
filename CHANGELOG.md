@@ -3,6 +3,49 @@
 Notable changes to the autonomous trading bot. Newest first.
 (Account: Agentic cash `••••596618249`, ~$120, +$10/week deposits.)
 
+## 2026-09-07 - DAMIAN: research-only market-wide stock scanner (new, separate from the trader)
+### Added - Damian sleeve-less research agent
+- New `damian.py` (pure stdlib, no pip) + `damian.json` + `docs/damian_routine.md`.
+  **Research only: Damian never places an order and is never imported by `cloud_decide.py`.**
+- **Discovery is market-wide, not a fixed list.** Three saved Robinhood screeners replace any
+  hardcoded universe (the old `find_pairs.UNIVERSE` is a fallback only, and was always the wrong
+  shape for discovery - it is 156 large caps chosen to *pair up*):
+  - `Damian 1 - Forward P/E value`  `e45950fb-6e04-41a8-98d4-b1f89c7152ac`  (398 matches)
+  - `Damian 2 - Earnings quality`   `73085aca-8b9a-4c8e-8417-1a96097cc5b5`  (212 matches)
+  - `Damian 3 - Macro trend + val`  `e8af976c-5a06-47e1-801a-cf1f1cc0584d`  (218 matches)
+  First run: 466 unique tickers, **144 of the top 200 were NOT in the old universe**.
+- **Forward P/E is native after all.** The scanner exposes `FILTER_TYPE_FORWARD_PE` (plus `PEG`,
+  `EPS`, margins, ROE/ROA, sector) - `get_equity_fundamentals` does NOT. Damian prefers the
+  scanner's forward P/E and falls back to a constructed one (price / [last 3 reported quarters +
+  next quarter's estimate]) only when a name did not come from a scan.
+- **Three scored pillars** (weights in `damian.json`): VALUATION (level, discount vs sector median,
+  trailing-vs-forward P/E compression), EARNINGS (beat rate, mean surprise, YoY EPS growth,
+  net-margin trend), MACRO (sector 3mo trend, relative strength vs SPY, 52-week range position).
+  Pillars renormalise when data is missing, so a dark pillar neither helps nor penalises a name.
+- **Confluence bonus** - a name surfacing in 2-3 independent screens scores higher; value, quality
+  and trend agreeing is the strongest single signal Damian has. 13 names cleared all three.
+- **Two-stage funnel by necessity:** `get_earnings_results` is ONE symbol per call, so scanning 400+
+  names that way would blow the routine's context. Stage 1 ranks everything on cheap data
+  (scanner columns + prices); stage 2 spends per-symbol calls on ~20 survivors only.
+- Outputs `data/damian_report.md`, `data/damian_picks.json`, and append-only
+  `data/damian_journal.jsonl` (same convention as `bot_journal.jsonl`).
+### Added - routine
+- **`Damian - market scan`** `trig_01Ds7CYFws1XKHeJU4m1ZXXf`, Mon-Fri 12:20 UTC (7:20am CT).
+  **Created DISABLED** per Golden Rule #2. Prompt is one line pointing at
+  `docs/damian_routine.md`, so behaviour changes land by editing that file + `git push`.
+  Google-Drive attached; **the Robinhood connector must be added in the web UI** - this Claude Code
+  session cannot attach it (a local server shadows the claude.ai connector).
+### Verified
+- Local end-to-end: 466 discovered -> 440 scored, MU top at 91.8 (fwd P/E 6.6 vs trailing 23.0 -
+  the memory-cycle earnings ramp, exactly the compression the valuation pillar is built to catch).
+- Stage-2 path validated on a fixture: sector resolves, earnings pillar lights up, confluence
+  carries through. Fixture deleted afterwards so it cannot pollute a real run.
+### Gotchas found
+- `FILTER_TYPE_EARNINGS_DATE` rejected both `YYYY-MM-DD` and RFC3339 ("Invalid Filter Value for
+  date filter"); the earnings-window dimension uses `get_earnings_calendar` instead.
+- `run_scan` / `create_scan` payloads are ~95k chars - must go to a file, never into context.
+- Scanner PERCENTAGE filters take decimals (0.05 = 5%); a whole number silently matches nothing.
+
 ## 2026-08-18 — TANK exit rework: ACCUMULATE, trim only on a real move (stop churning pennies)
 ### Changed — sell-the-first-bounce → hold-and-take-real-gains
 - **Problem:** the old exit trimmed on `RSI2>70 OR close>5-day-MA` — the 5-day reclaim is a very low bar,

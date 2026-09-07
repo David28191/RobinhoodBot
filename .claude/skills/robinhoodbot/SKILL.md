@@ -90,6 +90,7 @@ _Sizing tracks the REAL account value each run (allocation.py off `get_portfolio
 | `find_pairs.py` | Discovery universe (28 sectors / 156 tickers) + cointegration math (ADF, half-life). |
 | `scout_pairs.py` | Weekly pair-discovery report (cloud-runnable); ADD-candidates, full ACTIONABLE-NOW detail (which leg to BUY, coint/ADF, corr, half-life, win%), and per-pair **sector macro trend** (3mo + vs-200d, flags long-into-a-falling-sector). |
 | `review_trades.py` | Hindsight scorecard of real fills (return, MAE/MFE, entry timing, vs-SPY). |
+| `damian.py` / `damian.json` | **Damian** - research-only market-wide stock scanner (forward P/E + earnings + macro) via 3 saved Robinhood screeners. Never trades, never imported by the brain. Spec: `docs/damian_routine.md`. Local dry-run `python damian.py`. |
 | `screen_value.py` | S&P 500 buy-low value screener (separate research tool). |
 | `build_dashboard.py` | Unified tabbed `bot_dashboard.html` (Overview + 3 strategy tabs): allocation, trades+P&L, recommendations, and pair-finder **scope + "changes since last update"**. Reads `data/account_snapshot.json` + `data/pair_scout.json`. |
 | Configs | `pairs.json`, `spy_accumulate.json`, `swing.json`, `spy.json` |
@@ -106,6 +107,7 @@ _Sizing tracks the REAL account value each run (allocation.py off `get_portfolio
 | Pair Scout | `trig_01RF4emscfykPKgba1Adcjaj` | Mon 8:05am ET | Pair candidates + sector trend → push + Drive (`pair_scout_latest.txt`). |
 | Trade Review | `trig_01T669GazXXPoWNijRGeowGw` | Fri 5:08pm ET | Hindsight scorecard → push + Drive (`trade_review_latest.txt`). |
 | Dashboard Refresh | `trig_019hbuAg3ij4oPZAFh4xbt81` | Daily 6:05pm ET | Rebuilds dashboard (account + recs) → Drive (`bot_dashboard_latest.html`); persists `scope_prev.json` for day-over-day diffs. |
+| **Damian - market scan** | `trig_01Ds7CYFws1XKHeJU4m1ZXXf` | Mon-Fri 7:20am CT | **DISABLED** - research-only market-wide stock scan (fwd P/E + earnings + macro). Places NO orders. Needs the Robinhood connector added in the web UI. |
 | Cloud Brain (DRY RUN) | `trig_01D42gNNUFWG3Ykw1CH5qafs` | Mon–Fri 9:40am ET | **Disabled** — rehearsal (decide + notify, no trades); re-enable to test before risky changes. |
 
 All clone the repo, `pip install pandas numpy yfinance plotly`, pull data from the

@@ -1,0 +1,81 @@
+{
+  "_comment": "Damian — research-only stock scanner. Scores the find_pairs.UNIVERSE on valuation (forward P/E), earnings quality, and macro/trend. NEVER places orders.",
+
+  "universe_source": "scans",
+  "_universe_note": "'scans' = market-wide discovery via saved Robinhood screeners (data/damian_scan_results.json). 'find_pairs' falls back to the fixed 156-name pair universe, which is NOT for discovery. Scan ids live in data/damian_scans.json; the routine runs them with run_scan.",
+  "scans": {
+    "Damian 1 - Forward P/E value": "e45950fb-6e04-41a8-98d4-b1f89c7152ac",
+    "Damian 2 - Earnings quality": "73085aca-8b9a-4c8e-8417-1a96097cc5b5",
+    "Damian 3 - Macro trend + valuation": "e8af976c-5a06-47e1-801a-cf1f1cc0584d"
+  },
+  "confluence": {
+    "_comment": "A name surfacing in more than one independent screen is the single strongest signal Damian has - value AND quality AND trend agreeing. Adds to the composite score.",
+    "bonus_per_extra_scan": 6.0,
+    "max_bonus": 12.0
+  },
+  "extra_tickers": [],
+  "benchmark": "SPY",
+
+  "weights": {
+    "valuation": 0.35,
+    "earnings": 0.35,
+    "macro": 0.30
+  },
+
+  "valuation": {
+    "_comment": "Forward P/E is CONSTRUCTED: blended fwd EPS = last 3 reported quarters + next quarter's estimate. Robinhood exposes no forward-PE field.",
+    "fwd_pe_floor": 3.0,
+    "fwd_pe_cap": 60.0,
+    "ideal_fwd_pe": 15.0,
+    "sector_discount_weight": 0.45,
+    "compression_weight": 0.30,
+    "abs_level_weight": 0.25,
+    "max_compression_credit": 0.40
+  },
+
+  "earnings": {
+    "min_quarters": 4,
+    "beat_rate_weight": 0.35,
+    "surprise_weight": 0.25,
+    "eps_growth_weight": 0.25,
+    "margin_trend_weight": 0.15,
+    "surprise_cap_pct": 0.25,
+    "eps_growth_cap_pct": 0.60
+  },
+
+  "macro": {
+    "sector_trend_weight": 0.40,
+    "rel_strength_weight": 0.35,
+    "range_position_weight": 0.25,
+    "trend_lookback_days": 63,
+    "long_trend_days": 200,
+    "ideal_range_position": 0.55
+  },
+
+  "filters": {
+    "min_market_cap": 2000000000,
+    "min_avg_volume": 500000,
+    "require_positive_fwd_eps": true,
+    "max_days_to_earnings_flag": 10
+  },
+
+  "prescreen": {
+    "_comment": "Stage 1: rank the whole universe on data that is CHEAP to fetch (fundamentals are 10 symbols/call, prices are already pulled). Only the survivors get stage-2 earnings calls, which cost 1 MCP call per symbol.",
+    "shortlist_n": 24,
+    "trailing_pe_cap": 70.0,
+    "ideal_trailing_pe": 18.0,
+    "weights": {
+      "value": 0.45,
+      "macro": 0.55
+    },
+    "shortlist_path": "data/damian_shortlist.json"
+  },
+
+  "output": {
+    "top_n": 12,
+    "watch_n": 8,
+    "report_path": "data/damian_report.md",
+    "picks_path": "data/damian_picks.json",
+    "journal_path": "data/damian_journal.jsonl"
+  }
+}
