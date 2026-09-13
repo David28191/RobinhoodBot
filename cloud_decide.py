@@ -326,6 +326,12 @@ def main():
     close = prices_df(prices_json)
     today = dt.date.today()
 
+    # INTRADAY runs (30-min cadence, env CC_INTRADAY=1) run the fast opportunistic TANK sleeve only
+    # — which includes SPY/QQQ — and SKIP pairs + swing. Pairs/swing stay on the twice-daily full
+    # runs (they're slower by design). The tank's own cooldown_days + max_names + the per-run cash
+    # cap below prevent the 30-min cadence from over-trading.
+    intraday = os.environ.get("CC_INTRADAY") == "1"
+
     cfg_pairs = pairbot.load_config()
     cfg_tank = tank.load_config()
     with open(SWING_CFG_FILE) as f:
@@ -346,19 +352,22 @@ def main():
     # if we think we hold a leg but the account has ~none of that ticker, drop
     # the stale position so this run re-enters cleanly instead of wedging.
     _shares = state.get("shares", {})
-    _cfgmap = {p["name"]: p for p in cfg_pairs["pairs"]}
-    recon_notes = []
-    for _nm, _p in list(state.get("pairs_positions", {}).items()):
-        _cf = _cfgmap.get(_nm)
-        if not _cf:
-            continue
-        _held = _cf["a"] if _p.get("direction") == +1 else _cf["b"]
-        if float(_shares.get(_held) or 0.0) <= 1e-6:
-            state["pairs_positions"].pop(_nm, None)
-            recon_notes.append(f"{_nm}: ledger held {_held} but account has none -> reset to flat")
+    if not intraday:
+        _cfgmap = {p["name"]: p for p in cfg_pairs["pairs"]}
+        recon_notes = []
+        for _nm, _p in list(state.get("pairs_positions", {}).items()):
+            _cf = _cfgmap.get(_nm)
+            if not _cf:
+                continue
+            _held = _cf["a"] if _p.get("direction") == +1 else _cf["b"]
+            if float(_shares.get(_held) or 0.0) <= 1e-6:
+                state["pairs_positions"].pop(_nm, None)
+                recon_notes.append(f"{_nm}: ledger held {_held} but account has none -> reset to flat")
 
-    pair_orders, pair_notes = decide_pairs(cfg_pairs, close, state, today, al)
-    pair_notes = recon_notes + pair_notes
+        pair_orders, pair_notes = decide_pairs(cfg_pairs, close, state, today, al)
+        pair_notes = recon_notes + pair_notes
+    else:
+        pair_orders, pair_notes = [], ["intraday run — pairs skipped (twice-daily run handles pairs)"]
 
     # TANK reconciliation (Robinhood = source of truth): drop a tank position the account no longer
     # actually holds so a stale ledger can't phantom-trim or wedge. A buy dropped by cash_guard also
@@ -372,7 +381,10 @@ def main():
     tank_orders, tank_notes, tank_led = tank.decide(cfg_tank, close, state, al["tank_budget"], today, spot=spot_quotes)
     tank_notes = tank_recon + tank_notes
 
-    swing_orders, swing_price, swing_notes = decide_swing(cfg_swing, close, state, al)
+    if not intraday:
+        swing_orders, swing_price, swing_notes = decide_swing(cfg_swing, close, state, al)
+    else:
+        swing_orders, swing_price, swing_notes = [], None, ["intraday run — swing skipped (twice-daily run handles swing)"]
 
     broker = to_broker_orders(pair_orders, tank_orders, swing_orders, cfg_swing["symbol"], state, account)
     broker, dropped, cash_left = cash_guard(broker, min(float(state.get("cash", 0)), max_run_spend))

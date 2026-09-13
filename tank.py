@@ -27,15 +27,24 @@ def _units(dd, r2, cfg):
     if r2 < cfg["rsi_tank"]: u += 1
     return u
 
-def _metrics(cfg, close, sym):
+def _metrics(cfg, close, sym, spot_px=None):
     if sym not in close.columns: return None
-    px = close[sym].dropna()
-    if len(px) < cfg["hi_lookback"] + 2: return None
+    daily = close[sym].dropna()
+    if len(daily) < cfg["hi_lookback"] + 2: return None
+    # 20-day high from the DAILY closes (the reference the drawdown is measured against).
+    hi = float(daily.tail(cfg["hi_lookback"]).max())
+    # INTRADAY: if a live spot is provided, treat it as "today's price" so an intraday tank
+    # (a drop happening RIGHT NOW, before today's daily close is even printed) fires the ladder —
+    # this is what makes a 30-min cadence actually catch opportunities the twice-daily run misses.
+    # We append the live price as the latest bar for BOTH the drawdown and the RSI(2). Without a
+    # spot we fall back to the daily close (original end-of-day behaviour).
+    px = daily
+    if spot_px and spot_px > 0:
+        px = pd.concat([daily, pd.Series([float(spot_px)])], ignore_index=True)
     p = float(px.iloc[-1])
-    hi = float(px.tail(cfg["hi_lookback"]).max())
     dd = p/hi - 1
     r2 = float(_rsi(px, cfg["rsi_len"]).iloc[-1])
-    return dict(price=p, dd=dd, rsi2=r2)
+    return dict(price=p, dd=dd, rsi2=r2, intraday=bool(spot_px and spot_px > 0))
 
 def decide(cfg, close, state, budget, today, spot=None):
     """Pure. Returns (orders, notes, new_ledger). orders: internal dicts
@@ -49,10 +58,12 @@ def decide(cfg, close, state, budget, today, spot=None):
     positions = led.setdefault("positions", {})
     orders, notes = [], []
 
-    # rank watch names by severity (deepest drawdown first)
+    # rank watch names by severity (deepest drawdown first). Fold the live spot into each name's
+    # signal so an INTRADAY tank is detected, not just an end-of-day one.
     scored = []
     for sym in cfg["watch"]:
-        m = _metrics(cfg, close, sym)
+        spot_px = float(spot.get(sym) or 0.0) if spot else 0.0
+        m = _metrics(cfg, close, sym, spot_px=spot_px if spot_px > 0 else None)
         if m: scored.append((sym, m))
     scored.sort(key=lambda kv: kv[1]["dd"])
 
