@@ -8,7 +8,7 @@
   "mode": "base_ladder",
   "base_pct": 0.50,
   "n_steps": 4,
-  "add_ladder": [[-0.75, 1], [-1.0, 2], [-1.5, 3], [-2.0, 4]],
+  "add_ladder": [[-0.5, 1], [-1.0, 2], [-1.5, 3], [-2.0, 4]],
   "trim_ladder": [[2.5, 2], [4.0, 0]],
   "cooldown_days": 3,
   "capital": 24,
