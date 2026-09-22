@@ -14,7 +14,7 @@
   "max_names": 5,
 
   "profit_target": 0.20,
-  "trim_rsi": 90,
+  "trim_rsi": 95,
   "timeout_days": 60,
   "stop_pct": -0.25,
   "reentry_cooldown_days": 7,
