@@ -11,7 +11,7 @@
   "rsi_tank": 10,
   "hi_lookback": 20,
   "cooldown_days": 2,
-  "max_names": 4,
+  "max_names": 5,
 
   "profit_target": 0.20,
   "trim_rsi": 90,
