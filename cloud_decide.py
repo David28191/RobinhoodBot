@@ -30,6 +30,7 @@ INPUT FILES (the cloud agent builds these from MCP calls):
 """
 
 import datetime as dt
+import hashlib
 import json
 import os
 import uuid
@@ -42,6 +43,17 @@ import allocation
 import live                      # reuse live.decide (pairs) -- pure function
 import spy_wtd                   # swing engine (base + z-ladder)
 import tank                      # TANK accumulator — replaced the retired SPY weekly-DCA sleeve (2026-08-15)
+
+# Fixed namespace for deterministic ref_ids. Same (date+source+symbol+side+extra)
+# always produces the same UUID, so if cloud_decide.py runs more than once in one
+# routine invocation the broker sees the same ref_id and treats it as idempotent.
+_DEDUP_NS = uuid.UUID("b0b8f63a-1e2d-4c5f-8b9a-0d1c2e3f4a5b")
+
+def _det_ref_id(date, source, symbol, side, extra=""):
+    key = f"{date}:{source}:{symbol.upper()}:{side.lower()}:{extra}"
+    h = hashlib.md5(key.encode()).hexdigest()
+    return str(uuid.UUID(f"{h[:8]}-{h[8:12]}-4{h[13:16]}-{h[16:20]}-{h[20:32]}"))
+
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = pairbot.DATA_DIR
@@ -227,7 +239,10 @@ def decide_swing(cfg_swing, close, state, al):
 # ---------------------------------------------------------------------------
 # Turn internal decisions into broker-ready intended orders (dollar/share sized)
 # ---------------------------------------------------------------------------
-def to_broker_orders(pair_orders, tank_orders, swing_orders, swing_symbol, state, account):
+def to_broker_orders(pair_orders, tank_orders, swing_orders, swing_symbol, state, account, data_date=None):
+    if data_date is None:
+        data_date = dt.date.today()
+    date_str = str(data_date)
     shares = state.get("shares", {})
     out = []
 
@@ -237,7 +252,8 @@ def to_broker_orders(pair_orders, tank_orders, swing_orders, swing_symbol, state
         # (never place the SELL if the paired BUY can't be funded).
         group = str(uuid.uuid4()) if o["action"] == "SWAP" else None
         for leg in o["legs"]:
-            base = {"ref_id": str(uuid.uuid4()), "source": "pairs", "group": group,
+            ref = _det_ref_id(date_str, "pairs", leg["ticker"], leg["side"], extra=o["pair"])
+            base = {"ref_id": ref, "source": "pairs", "group": group,
                     "pair": o["pair"], "reason": f"{o['action']}:{o['reason']}",
                     "account_number": account, "symbol": leg["ticker"], "type": "market"}
             if leg["side"] == "BUY":
@@ -263,7 +279,8 @@ def to_broker_orders(pair_orders, tank_orders, swing_orders, swing_symbol, state
 
     # --- TANK accumulator (buy tanks / trim bounces / melt-ice-cube core buy) ---
     for o in tank_orders:
-        base = {"ref_id": str(uuid.uuid4()), "source": "tank",
+        ref = _det_ref_id(date_str, "tank", o["symbol"], o["side"])
+        base = {"ref_id": ref, "source": "tank",
                 "reason": o["reason"], "account_number": account,
                 "symbol": o["symbol"], "type": "market"}
         if o["side"] == "BUY":         # tank buy or backstop core buy -> dollar-sized
@@ -278,7 +295,8 @@ def to_broker_orders(pair_orders, tank_orders, swing_orders, swing_symbol, state
 
     # --- swing sleeve (base + ladder on swing_symbol, e.g. QQQ) ---
     for o in swing_orders:
-        base = {"ref_id": str(uuid.uuid4()), "source": "swing",
+        ref = _det_ref_id(date_str, "swing", swing_symbol, o["side"])
+        base = {"ref_id": ref, "source": "swing",
                 "reason": o["reason"], "account_number": account,
                 "symbol": swing_symbol, "type": "market"}
         if o["side"] == "BUY":                   # BASE_BUY / ADD -> dollar-sized buy
@@ -386,7 +404,8 @@ def main():
     else:
         swing_orders, swing_price, swing_notes = [], None, ["intraday run — swing skipped (twice-daily run handles swing)"]
 
-    broker = to_broker_orders(pair_orders, tank_orders, swing_orders, cfg_swing["symbol"], state, account)
+    data_date = close.index[-1].date()
+    broker = to_broker_orders(pair_orders, tank_orders, swing_orders, cfg_swing["symbol"], state, account, data_date)
     broker, dropped, cash_left = cash_guard(broker, min(float(state.get("cash", 0)), max_run_spend))
     # Pairs whose order was (partially) dropped for cash must NOT update the
     # optimistic ledger below -- otherwise a swap that never placed would record
