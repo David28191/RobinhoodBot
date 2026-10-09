@@ -388,6 +388,25 @@ def main():
 
     broker = to_broker_orders(pair_orders, tank_orders, swing_orders, cfg_swing["symbol"], state, account)
     broker, dropped, cash_left = cash_guard(broker, min(float(state.get("cash", 0)), max_run_spend))
+
+    # Dedup: if state didn't persist between the AM and PM runs, both runs can fire
+    # a first-unit BUY for the same symbol (they each see held_u=0). Keep the first
+    # occurrence; drop extras so we never place 2–4 identical orders in one batch.
+    _seen, _deduped, _dedup_dropped = set(), [], []
+    for _o in broker:
+        if _o.get("source") == "pairs":
+            _key = (_o.get("source"), _o.get("pair"), _o.get("symbol"), _o.get("side"))
+        else:
+            _key = (_o.get("source"), _o.get("symbol"), _o.get("side"))
+        if _key not in _seen:
+            _seen.add(_key)
+            _deduped.append(_o)
+        else:
+            _dedup_dropped.append({**_o, "dropped_reason": f"dedup: duplicate {_o.get('source')} {_o.get('symbol')} {_o.get('side')} in single run"})
+    if _dedup_dropped:
+        dropped = dropped + _dedup_dropped
+    broker = _deduped
+
     # Pairs whose order was (partially) dropped for cash must NOT update the
     # optimistic ledger below -- otherwise a swap that never placed would record
     # us into the new leg and poison next run (the classic stale-state bug).
