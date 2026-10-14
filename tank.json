@@ -6,7 +6,7 @@
             "PLTR","COIN","SMCI","MU","QCOM","UBER","CRWD","NET","MRVL"],
 
   "unit_dollars": 3.5,
-  "dd_ladder": [[-0.06, 1], [-0.09, 2], [-0.12, 3], [-0.18, 4]],
+  "dd_ladder": [[-0.07, 1], [-0.10, 2], [-0.14, 3], [-0.18, 4]],
   "rsi_len": 2,
   "rsi_tank": 10,
   "hi_lookback": 20,
