@@ -16,7 +16,7 @@
   "profit_target": 0.20,
   "trim_rsi": 98,
   "timeout_days": 40,
-  "stop_pct": -0.25,
+  "stop_pct": -0.20,
   "reentry_cooldown_days": 7,
 
   "backstop_days": 15,
