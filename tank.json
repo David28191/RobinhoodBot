@@ -10,7 +10,7 @@
   "max_name_dollars": 20,
   "rsi_len": 2,
   "rsi_tank": 10,
-  "hi_lookback": 20,
+  "hi_lookback": 60,
   "cooldown_days": 2,
   "max_names": 6,
 
