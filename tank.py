@@ -124,8 +124,12 @@ def decide(cfg, close, state, budget, today, spot=None):
                     if recovery > thr:
                         notes.append(f"{sym}: tank signal but +{recovery*100:.1f}% above signal close (>{thr*100:.0f}% intraday recovery) — skip")
                         continue
+            max_nm = float(cfg.get("max_name_dollars", float("inf")))
+            current_basis = float(positions.get(sym, {}).get("basis", 0.0))
+            if current_basis >= max_nm:
+                notes.append(f"{sym}: tank {target_u}u but at max_name_dollars limit (${current_basis:.0f}/${max_nm:.0f}) — skip"); continue
             add_u = target_u - held_u
-            add_dollars = min(add_u * unit, max(0.0, budget - deployed))
+            add_dollars = min(add_u * unit, max(0.0, budget - deployed), max(0.0, max_nm - current_basis))
             if add_dollars >= 1:
                 sh = round((add_dollars - add_dollars*cost) / m["price"], SHARE_DP)
                 prev = held or {}
